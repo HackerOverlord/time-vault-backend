@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Time Vault - Login</title>
+    <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #334155;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent-color: #4a9eff;
+            --accent-secondary: #10b981;
+            --danger-color: #ef4444;
+            --border-radius: 12px;
+            --transition: all 0.3s ease;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .auth-container {
+            width: 100%;
+            max-width: 450px;
+            padding: 20px;
+        }
+
+        .auth-card {
+            background: var(--bg-secondary);
+            padding: 40px;
+            border-radius: var(--border-radius);
+            border: 1px solid rgba(74, 158, 255, 0.2);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        .logo {
+            text-align: center;
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: var(--text-secondary);
+            margin-bottom: 40px;
+        }
+
+        .tabs {
+            display: flex;
+            margin-bottom: 30px;
+            border-bottom: 2px solid rgba(74, 158, 255, 0.2);
+        }
+
+        .tab {
+            flex: 1;
+            padding: 15px;
+            text-align: center;
+            cursor: pointer;
+            transition: var(--transition);
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .tab.active {
+            color: var(--accent-color);
+            border-bottom: 2px solid var(--accent-color);
+        }
+
+        .tab:hover {
+            color: var(--text-primary);
+        }
+
+        .form {
+            display: none;
+        }
+
+        .form.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px 15px;
+            background: var(--bg-primary);
+            border: 1px solid rgba(74, 158, 255, 0.3);
+            border-radius: var(--border-radius);
+            color: var(--text-primary);
+            font-size: 1rem;
+            transition: var(--transition);
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 10px rgba(74, 158, 255, 0.2);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: var(--border-radius);
+            font-size: 1rem;
+            cursor: pointer;
+            transition: var(--transition);
+            font-weight: 500;
+            margin-top: 10px;
+        }
+
+        .btn-primary {
+            background: var(--accent-color);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(74, 158, 255, 0.3);
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: var(--accent-secondary);
+        }
+
+        .error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: var(--danger-color);
+            padding: 12px;
+            border-radius: var(--border-radius);
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .success {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: var(--accent-secondary);
+            padding: 12px;
+            border-radius: var(--border-radius);
+            margin-bottom: 20px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-container">
+        <div class="auth-card">
+            <div class="logo">⭐🔐 Time Vault</div>
+            <p class="subtitle">Secure your memories for the future</p>
+
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('login')">Login</div>
+                <div class="tab" onclick="switchTab('signup')">Sign Up</div>
+            </div>
+
+            <div id="error-message" class="error"></div>
+            <div id="success-message" class="success"></div>
+
+            <!-- Login Form -->
+            <form id="login-form" class="form active" onsubmit="handleLogin(event)">
+                <div class="form-group">
+                    <label class="form-label">Email</label>
+                    <input type="email" class="form-input" id="login-email" required placeholder="Enter your email">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Password</label>
+                    <input type="password" class="form-input" id="login-password" required placeholder="Enter your password">
+                </div>
+
+                <button type="submit" class="btn btn-primary">Login</button>
+            </form>
+
+            <!-- Signup Form -->
+            <form id="signup-form" class="form" onsubmit="handleSignup(event)">
+                <div class="form-group">
+                    <label class="form-label">Name</label>
+                    <input type="text" class="form-input" id="signup-name" required placeholder="Enter your full name">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Email</label>
+                    <input type="email" class="form-input" id="signup-email" required placeholder="Enter your email">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Password</label>
+                    <input type="password" class="form-input" id="signup-password" required placeholder="Create a password">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Confirm Password</label>
+                    <input type="password" class="form-input" id="signup-confirm-password" required placeholder="Confirm your password">
+                </div>
+
+                <button type="submit" class="btn btn-primary">Create Account</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        function switchTab(tab) {
+            // Update tab styles
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // Show/hide forms
+            document.querySelectorAll('.form').forEach(f => f.classList.remove('active'));
+            document.getElementById(`${tab}-form`).classList.add('active');
+
+            // Clear messages
+            hideMessages();
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            document.getElementById('success-message').style.display = 'none';
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.getElementById('success-message');
+            successDiv.textContent = message;
+            successDiv.style.display = 'block';
+            document.getElementById('error-message').style.display = 'none';
+        }
+
+        function hideMessages() {
+            document.getElementById('error-message').style.display = 'none';
+            document.getElementById('success-message').style.display = 'none';
+        }
+
+        async function handleLogin(event) {
+            console.log("=" * 50);
+            console.log("LOGIN FORM SUBMITTED");
+            console.log("=" * 50);
+            
+            event.preventDefault();
+            console.log("Event prevented");
+            
+            hideMessages();
+            console.log("Messages hidden");
+
+            const email = document.getElementById('login-email').value;
+            const password = document.getElementById('login-password').value;
+
+            console.log('Email value:', email);
+            console.log('Password value:', password ? '***' : 'empty');
+            console.log('Form values captured');
+
+            try {
+                console.log("Starting fetch request to /api/login");
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify({ email, password })
+                });
+
+                console.log('Response received');
+                console.log('Response status:', response.status);
+                console.log('Response status text:', response.statusText);
+                console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+                console.log('Response ok:', response.ok);
+                
+                const data = await response.json();
+                console.log('Response data parsed:', data);
+
+                if (response.ok) {
+                    console.log("Login successful - storing data to localStorage");
+                    
+                    // Store session
+                    localStorage.setItem('userEmail', email);
+                    console.log('userEmail stored:', email);
+                    
+                    localStorage.setItem('userName', data.name);
+                    console.log('userName stored:', data.name);
+                    
+                    localStorage.setItem('userId', data.user_id);
+                    console.log('userId stored:', data.user_id);
+                    
+                    console.log('All localStorage operations completed');
+                    console.log('Current localStorage:', {
+                        userEmail: localStorage.getItem('userEmail'),
+                        userName: localStorage.getItem('userName'),
+                        userId: localStorage.getItem('userId')
+                    });
+                    
+                    console.log('About to redirect to /app');
+                    console.log('Current window.location:', window.location.href);
+                    
+                    // Redirect to main app
+                    console.log('Executing redirect...');
+                    window.location.href = '/app';
+                    
+                    console.log('Redirect command executed (this line may not be reached due to redirect)');
+                } else {
+                    console.error('Login failed with status:', response.status);
+                    console.error('Error message:', data.error);
+                    showError(data.error || 'Login failed');
+                }
+            } catch (error) {
+                console.error('Login request error:', error);
+                console.error('Error stack:', error.stack);
+                showError('Failed to connect to server');
+            }
+            
+            console.log("=" * 50);
+        }
+
+        async function handleSignup(event) {
+            event.preventDefault();
+            hideMessages();
+
+            const name = document.getElementById('signup-name').value;
+            const email = document.getElementById('signup-email').value;
+            const password = document.getElementById('signup-password').value;
+            const confirmPassword = document.getElementById('signup-confirm-password').value;
+
+            if (password !== confirmPassword) {
+                showError('Passwords do not match');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify({ name, email, password })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showSuccess('Account created successfully! Please login.');
+                    // Switch to login tab
+                    setTimeout(() => {
+                        document.querySelector('.tab').click();
+                    }, 1500);
+                } else {
+                    showError(data.error || 'Registration failed');
+                }
+            } catch (error) {
+                showError('Failed to connect to server');
+            }
+        }
+    </script>
+</body>
+</html>

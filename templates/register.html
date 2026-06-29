@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Time Vault - Sign Up</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            color: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .register-container {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 40px;
+            width: 100%;
+            max-width: 500px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .logo h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #4a9eff, #6366f1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+
+        .logo p {
+            color: #b0b0b0;
+            font-size: 0.9rem;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #ffffff;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            color: #ffffff;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #4a9eff;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .trustee-info {
+            background: rgba(74, 158, 255, 0.05);
+            border: 1px solid rgba(74, 158, 255, 0.1);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .trustee-info h3 {
+            font-size: 0.9rem;
+            color: #4a9eff;
+            margin-bottom: 10px;
+        }
+
+        .trustee-info p {
+            font-size: 0.8rem;
+            color: #b0b0b0;
+            line-height: 1.4;
+        }
+
+        .btn {
+            width: 100%;
+            background: #4a9eff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            font-size: 1rem;
+        }
+
+        .btn:hover {
+            background: #3a8eef;
+            transform: translateY(-2px);
+        }
+
+        .links {
+            text-align: center;
+            margin-top: 30px;
+            color: #b0b0b0;
+        }
+
+        .links a {
+            color: #4a9eff;
+            text-decoration: none;
+            margin: 0 10px;
+        }
+
+        .links a:hover {
+            text-decoration: underline;
+        }
+
+        .error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+        }
+
+        .success {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            color: #10b981;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="register-container">
+        <div class="logo">
+            <h1>⭐🔐 Time Vault</h1>
+            <p>Create your secure memory vault</p>
+        </div>
+
+        <div id="message"></div>
+
+        <form id="register-form">
+            <div class="form-group">
+                <label class="form-label" for="email">Email</label>
+                <input type="email" id="email" class="form-input" required>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label" for="password">Password</label>
+                <input type="password" id="password" class="form-input" required>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label" for="confirm-password">Confirm Password</label>
+                <input type="password" id="confirm-password" class="form-input" required>
+            </div>
+
+            <div class="trustee-info">
+                <h3>🛡️ Dead Man's Switch (Optional)</h3>
+                <p>Designate a trusted person who can access your memories in case of emergency. This person will only gain access if you haven't logged in for 6+ months.</p>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label" for="trustee-name">Trustee Name</label>
+                        <input type="text" id="trustee-name" class="form-input" placeholder="John Doe">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label" for="trustee-email">Trustee Email</label>
+                        <input type="email" id="trustee-email" class="form-input" placeholder="trustee@example.com">
+                    </div>
+                </div>
+            </div>
+            
+            <button type="submit" class="btn">
+                🔒 Create Secure Account
+            </button>
+        </form>
+
+        <div class="links">
+            <a href="/login">Already have an account? Login</a>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+
+        document.getElementById('register-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const password = document.getElementById('password').value;
+            const confirmPassword = document.getElementById('confirm-password').value;
+            
+            if (password !== confirmPassword) {
+                showMessage('Passwords do not match', 'error');
+                return;
+            }
+            
+            const formData = {
+                email: document.getElementById('email').value,
+                password: password,
+                trustee_name: document.getElementById('trustee-name').value,
+                trustee_email: document.getElementById('trustee-email').value
+            };
+            
+            try {
+                const response = await axios.post(`${API_BASE}/register`, formData);
+                
+                showMessage('Account created successfully! Redirecting to login...', 'success');
+                
+                setTimeout(() => {
+                    window.location.href = '/login';
+                }, 2000);
+                
+            } catch (error) {
+                showMessage(error.response?.data?.error || 'Registration failed', 'error');
+            }
+        });
+
+        function showMessage(message, type) {
+            const messageDiv = document.getElementById('message');
+            messageDiv.className = type;
+            messageDiv.textContent = message;
+            
+            setTimeout(() => {
+                messageDiv.className = '';
+                messageDiv.textContent = '';
+            }, 5000);
+        }
+    </script>
+</body>
+</html>

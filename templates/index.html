@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Time Vault</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary-color: #1a1a1a;
+            --secondary-color: #2d2d2d;
+            --accent-color: #4a9eff;
+            --text-primary: #ffffff;
+            --text-secondary: #b0b0b0;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --error-color: #ef4444;
+            --border-radius: 12px;
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            margin-bottom: 40px;
+        }
+
+        .logo {
+            font-size: 1.8rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-color), #6366f1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-color), #6366f1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+
+        .section {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: var(--border-radius);
+            padding: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: var(--transition);
+        }
+
+        .section:hover {
+            background: rgba(255, 255, 255, 0.08);
+            transform: translateY(-2px);
+        }
+
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 25px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .section-title .icon {
+            width: 30px;
+            height: 30px;
+            background: var(--accent-color);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+
+        .memory-grid {
+            display: grid;
+            gap: 20px;
+        }
+
+        .memory-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: var(--border-radius);
+            padding: 20px;
+            transition: var(--transition);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .memory-card:hover {
+            background: rgba(255, 255, 255, 0.06);
+            transform: translateY(-2px);
+            border-color: var(--accent-color);
+        }
+
+        .memory-card.locked {
+            border-left: 4px solid var(--warning-color);
+        }
+
+        .memory-card.released {
+            border-left: 4px solid var(--success-color);
+        }
+
+        .memory-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: var(--text-primary);
+        }
+
+        .memory-date {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 15px;
+        }
+
+        .countdown {
+            background: rgba(74, 158, 255, 0.1);
+            border: 1px solid rgba(74, 158, 255, 0.2);
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--accent-color);
+            margin-bottom: 10px;
+        }
+
+        .countdown.expired {
+            background: rgba(16, 185, 129, 0.1);
+            border-color: rgba(16, 185, 129, 0.2);
+            color: var(--success-color);
+        }
+
+        .memory-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .memory-status.locked {
+            background: rgba(245, 158, 11, 0.1);
+            color: var(--warning-color);
+        }
+
+        .memory-status.released {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success-color);
+        }
+
+        .memory-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 15px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .media-indicators {
+            display: flex;
+            gap: 8px;
+        }
+
+        .media-indicator {
+            width: 24px;
+            height: 24px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+
+        .btn {
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: var(--border-radius);
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+        }
+
+        .btn:hover {
+            background: #3a8eef;
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--accent-color);
+        }
+
+        .create-section {
+            text-align: center;
+            padding: 40px;
+            background: rgba(74, 158, 255, 0.05);
+            border: 2px dashed rgba(74, 158, 255, 0.3);
+            border-radius: var(--border-radius);
+            margin-bottom: 30px;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(5px);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--secondary-color);
+            border-radius: var(--border-radius);
+            padding: 40px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        .modal-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 5px;
+            border-radius: 6px;
+            transition: var(--transition);
+        }
+
+        .close-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .form-input, .form-textarea, .form-date {
+            width: 100%;
+            padding: 12px 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: var(--border-radius);
+            color: var(--text-primary);
+            font-size: 1rem;
+            transition: var(--transition);
+        }
+
+        .form-input:focus, .form-textarea:focus, .form-date:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .form-textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+
+        .file-upload {
+            position: relative;
+            display: inline-block;
+            cursor: pointer;
+            width: 100%;
+        }
+
+        .file-upload input[type=file] {
+            position: absolute;
+            left: -9999px;
+        }
+
+        .file-upload-label {
+            display: block;
+            padding: 12px 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px dashed rgba(255, 255, 255, 0.2);
+            border-radius: var(--border-radius);
+            text-align: center;
+            color: var(--text-secondary);
+            transition: var(--transition);
+        }
+
+        .file-upload-label:hover {
+            border-color: var(--accent-color);
+            color: var(--accent-color);
+            background: rgba(74, 158, 255, 0.05);
+        }
+
+        .storytelling-section {
+            background: rgba(74, 158, 255, 0.05);
+            border-radius: var(--border-radius);
+            padding: 30px;
+            margin-top: 30px;
+        }
+
+        .story-prompt {
+            font-size: 1.1rem;
+            font-weight: 500;
+            margin-bottom: 20px;
+            color: var(--accent-color);
+            font-style: italic;
+        }
+
+        .recording-btn {
+            background: var(--error-color);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: var(--border-radius);
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .recording-btn:hover {
+            background: #dc2626;
+        }
+
+        .recording-btn.recording {
+            background: var(--error-color);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .container {
+                padding: 15px;
+            }
+            
+            .section {
+                padding: 20px;
+            }
+            
+            .modal-content {
+                padding: 30px 20px;
+            }
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            color: var(--error-color);
+            padding: 15px;
+            border-radius: var(--border-radius);
+            margin-bottom: 20px;
+        }
+
+        .success {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            color: var(--success-color);
+            padding: 15px;
+            border-radius: var(--border-radius);
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">⭐🔐 Time Vault</div>
+            <div class="user-info">
+                <div class="user-avatar">U</div>
+                <span id="user-email">user@example.com</span>
+            </div>
+        </header>
+
+        <div class="create-section">
+            <h3 style="margin-bottom: 20px;">✨ Create New Time Capsule</h3>
+            <button class="btn" onclick="openCreateModal()">
+                <span>+</span> Create New Memory
+            </button>
+        </div>
+
+        <div class="main-content">
+            <section class="section">
+                <div class="section-title">
+                    <div class="icon">🔒</div>
+                    Active Capsules
+                </div>
+                <div id="active-capsules" class="memory-grid">
+                    <div class="loading">Loading locked capsules...</div>
+                </div>
+            </section>
+
+            <section class="section">
+                <div class="section-title">
+                    <div class="icon">📖</div>
+                    Opened Memories
+                </div>
+                <div id="opened-memories" class="memory-grid">
+                    <div class="loading">Loading released memories...</div>
+                </div>
+            </section>
+        </div>
+
+        <div class="storytelling-section">
+            <div class="section-title">
+                <div class="icon">🎤</div>
+                Storytelling Engine
+            </div>
+            <div class="story-prompt" id="story-prompt">
+                "Tell me about your grandmother..."
+            </div>
+            <button class="recording-btn" id="record-btn" onclick="toggleRecording()">
+                <span>🎤</span> Start Recording
+            </button>
+        </div>
+    </div>
+
+    <!-- Create Memory Modal -->
+    <div id="create-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Create Time Capsule</h2>
+                <button class="close-btn" onclick="closeCreateModal()">×</button>
+            </div>
+            
+            <form id="create-form">
+                <div class="form-group">
+                    <label class="form-label">Title</label>
+                    <input type="text" class="form-input" id="memory-title" required>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Content</label>
+                    <textarea class="form-textarea" id="memory-content" required></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Release Date</label>
+                    <input type="datetime-local" class="form-date" id="release-date" required>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">
+                        <input type="checkbox" id="release-on-death"> Release on Death
+                    </label>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Transmission Emails (comma-separated)</label>
+                    <input type="email" class="form-input" id="transmission-emails" placeholder="email1@example.com, email2@example.com">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Upload Media</label>
+                    <div class="file-upload">
+                        <input type="file" id="media-file" accept="image/*,video/*">
+                        <label for="media-file" class="file-upload-label">
+                            📎 Choose Image or Video
+                        </label>
+                    </div>
+                </div>
+                
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closeCreateModal()">Cancel</button>
+                    <button type="submit" class="btn">Create Capsule</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Memory Detail Modal -->
+    <div id="memory-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="memory-modal-title">Memory Details</h2>
+                <button class="close-btn" onclick="closeMemoryModal()">×</button>
+            </div>
+            
+            <div id="memory-modal-content">
+                <!-- Memory content will be loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script>
+        // API Configuration
+        const API_BASE = 'http://localhost:5000/api';
+        
+        // State Management
+        let currentUser = null;
+        let memories = [];
+        let isRecording = false;
+        let mediaRecorder = null;
+        let audioChunks = [];
+
+        // Story Prompts
+        const storyPrompts = [
+            "Tell me about your grandmother...",
+            "What's your favorite childhood memory?",
+            "Describe a moment that changed your life...",
+            "What advice would you give your younger self?",
+            "Tell me about your first love...",
+            "What are you most proud of?",
+            "Describe your perfect day...",
+            "What makes you truly happy?",
+            "Tell me about a time you overcame fear...",
+            "What legacy do you want to leave behind?"
+        ];
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            checkAuth();
+            loadMemories();
+            rotateStoryPrompts();
+            
+            // Set minimum release date to tomorrow
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            document.getElementById('release-date').min = tomorrow.toISOString().slice(0, 16);
+        });
+
+        // Authentication
+        async function checkAuth() {
+            try {
+                const response = await axios.get(`${API_BASE}/user`);
+                if (response.data) {
+                    currentUser = response.data;
+                    document.getElementById('user-email').textContent = currentUser.email;
+                }
+            } catch (error) {
+                // Redirect to login if not authenticated
+                window.location.href = '/login.html';
+            }
+        }
+
+        // Memory Management
+        async function loadMemories() {
+            try {
+                const response = await axios.get(`${API_BASE}/memories`);
+                memories = response.data.memories;
+                
+                const activeCapsules = memories.filter(m => m.status === 'locked');
+                const openedMemories = memories.filter(m => m.status === 'released');
+                
+                renderActiveCapsules(activeCapsules);
+                renderOpenedMemories(openedMemories);
+                
+                // Start countdown timers
+                activeCapsules.forEach(memory => {
+                    startCountdown(memory);
+                });
+            } catch (error) {
+                console.error('Error loading memories:', error);
+                showError('Failed to load memories');
+            }
+        }
+
+        function renderActiveCapsules(capsules) {
+            const container = document.getElementById('active-capsules');
+            
+            if (capsules.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">No active capsules</p>';
+                return;
+            }
+            
+            container.innerHTML = capsules.map(memory => `
+                <div class="memory-card locked" onclick="viewMemory(${memory.id})">
+                    <div class="memory-title">${memory.title}</div>
+                    <div class="memory-date">Created: ${formatDate(memory.created_at)}</div>
+                    <div class="countdown" id="countdown-${memory.id}">
+                        Loading countdown...
+                    </div>
+                    <div class="memory-status locked">🔒 Locked</div>
+                    <div class="memory-meta">
+                        <div>Release: ${formatDate(memory.release_date)}</div>
+                        <div class="media-indicators">
+                            ${memory.has_video ? '<div class="media-indicator">🎥</div>' : ''}
+                            ${memory.has_image ? '<div class="media-indicator">🖼️</div>' : ''}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderOpenedMemories(memories) {
+            const container = document.getElementById('opened-memories');
+            
+            if (memories.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">No opened memories yet</p>';
+                return;
+            }
+            
+            container.innerHTML = memories.map(memory => `
+                <div class="memory-card released" onclick="viewMemory(${memory.id})">
+                    <div class="memory-title">${memory.title}</div>
+                    <div class="memory-date">Opened: ${formatDate(memory.release_date)}</div>
+                    <div class="memory-status released">📖 Opened</div>
+                    <div class="memory-meta">
+                        <div>Created: ${formatDate(memory.created_at)}</div>
+                        <div class="media-indicators">
+                            ${memory.has_video ? '<div class="media-indicator">🎥</div>' : ''}
+                            ${memory.has_image ? '<div class="media-indicator">🖼️</div>' : ''}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Countdown Timer
+        function startCountdown(memory) {
+            const countdownElement = document.getElementById(`countdown-${memory.id}`);
+            if (!countdownElement) return;
+            
+            function updateCountdown() {
+                const now = new Date().getTime();
+                const releaseTime = new Date(memory.release_date).getTime();
+                const distance = releaseTime - now;
+                
+                if (distance < 0) {
+                    countdownElement.innerHTML = '🔓 Released!';
+                    countdownElement.classList.add('expired');
+                    return;
+                }
+                
+                const days = Math.floor(distance / (1000 * 60 * 60 * 24));
+                const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+                const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+                
+                countdownElement.innerHTML = `⏰ ${days}d ${hours}h ${minutes}m ${seconds}s`;
+            }
+            
+            updateCountdown();
+            setInterval(updateCountdown, 1000);
+        }
+
+        // Modal Functions
+        function openCreateModal() {
+            document.getElementById('create-modal').classList.add('active');
+        }
+
+        function closeCreateModal() {
+            document.getElementById('create-modal').classList.remove('active');
+            document.getElementById('create-form').reset();
+        }
+
+        async function viewMemory(memoryId) {
+            try {
+                const response = await axios.get(`${API_BASE}/memories/${memoryId}`);
+                const memory = response.data;
+                
+                document.getElementById('memory-modal-title').textContent = memory.title;
+                
+                const contentHtml = `
+                    <div class="memory-date">Created: ${formatDate(memory.created_at)}</div>
+                    <div class="memory-date">Released: ${formatDate(memory.release_date)}</div>
+                    <div style="margin: 20px 0; line-height: 1.8;">
+                        ${memory.content.replace(/\n/g, '<br>')}
+                    </div>
+                    ${memory.has_video ? `<video controls style="width: 100%; max-width: 400px; border-radius: var(--border-radius);"><source src="${API_BASE}/media/${memory.video_filename}" type="video/mp4"></video>` : ''}
+                    ${memory.has_image ? `<img src="${API_BASE}/media/${memory.image_filename}" style="width: 100%; max-width: 400px; border-radius: var(--border-radius);" alt="Memory image">` : ''}
+                `;
+                
+                document.getElementById('memory-modal-content').innerHTML = contentHtml;
+                document.getElementById('memory-modal').classList.add('active');
+            } catch (error) {
+                if (error.response?.status === 403) {
+                    showError('This memory is still locked until its release date');
+                } else {
+                    showError('Failed to load memory');
+                }
+            }
+        }
+
+        function closeMemoryModal() {
+            document.getElementById('memory-modal').classList.remove('active');
+        }
+
+        // Form Submission
+        document.getElementById('create-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = {
+                title: document.getElementById('memory-title').value,
+                content: document.getElementById('memory-content').value,
+                release_date: document.getElementById('release-date').value,
+                release_on_death: document.getElementById('release-on-death').checked,
+                transmission_emails: document.getElementById('transmission-emails').value
+            };
+            
+            try {
+                const response = await axios.post(`${API_BASE}/memories`, formData);
+                
+                // Handle file upload if present
+                const fileInput = document.getElementById('media-file');
+                if (fileInput.files[0]) {
+                    const fileFormData = new FormData();
+                    fileFormData.append('file', fileInput.files[0]);
+                    fileFormData.append('memory_id', response.data.memory_id);
+                    
+                    await axios.post(`${API_BASE}/upload`, fileFormData, {
+                        headers: { 'Content-Type': 'multipart/form-data' }
+                    });
+                }
+                
+                showSuccess('Time capsule created successfully!');
+                closeCreateModal();
+                loadMemories();
+            } catch (error) {
+                showError('Failed to create time capsule');
+            }
+        });
+
+        // Storytelling Engine
+        function rotateStoryPrompts() {
+            let currentIndex = 0;
+            
+            setInterval(() => {
+                currentIndex = (currentIndex + 1) % storyPrompts.length;
+                const promptElement = document.getElementById('story-prompt');
+                promptElement.style.opacity = '0';
+                
+                setTimeout(() => {
+                    promptElement.textContent = `"${storyPrompts[currentIndex]}"`;
+                    promptElement.style.opacity = '1';
+                }, 300);
+            }, 10000); // Rotate every 10 seconds
+        }
+
+        async function toggleRecording() {
+            const btn = document.getElementById('record-btn');
+            
+            if (!isRecording) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+                    
+                    mediaRecorder.ondataavailable = (event) => {
+                        audioChunks.push(event.data);
+                    };
+                    
+                    mediaRecorder.onstop = async () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        await uploadStoryAudio(audioBlob);
+                    };
+                    
+                    mediaRecorder.start();
+                    isRecording = true;
+                    btn.classList.add('recording');
+                    btn.innerHTML = '<span>⏹️</span> Stop Recording';
+                } catch (error) {
+                    showError('Failed to access microphone');
+                }
+            } else {
+                mediaRecorder.stop();
+                mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                isRecording = false;
+                btn.classList.remove('recording');
+                btn.innerHTML = '<span>🎤</span> Start Recording';
+            }
+        }
+
+        async function uploadStoryAudio(audioBlob) {
+            try {
+                const formData = new FormData();
+                formData.append('file', audioBlob, 'story.wav');
+                formData.append('memory_id', 'story-recording');
+                
+                await axios.post(`${API_BASE}/upload`, formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                });
+                
+                showSuccess('Story recorded successfully!');
+            } catch (error) {
+                showError('Failed to upload story');
+            }
+        }
+
+        // Utility Functions
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'error';
+            errorDiv.textContent = message;
+            document.querySelector('.container').insertBefore(errorDiv, document.querySelector('.main-content'));
+            
+            setTimeout(() => errorDiv.remove(), 5000);
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.createElement('div');
+            successDiv.className = 'success';
+            successDiv.textContent = message;
+            document.querySelector('.container').insertBefore(successDiv, document.querySelector('.main-content'));
+            
+            setTimeout(() => successDiv.remove(), 5000);
+        }
+
+        // Close modals on escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeCreateModal();
+                closeMemoryModal();
+            }
+        });
+
+        // Close modals on background click
+        document.getElementById('create-modal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeCreateModal();
+            }
+        });
+
+        document.getElementById('memory-modal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeMemoryModal();
+            }
+        });
+    </script>
+</body>
+</html>
