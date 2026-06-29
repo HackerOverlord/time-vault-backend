@@ -5,3 +5,5 @@ Werkzeug==2.3.7
 cryptography==41.0.1
 APScheduler==3.10.4
 python-dotenv==1.0.0
+resend==0.7.0
+gunicorn==21.2.0

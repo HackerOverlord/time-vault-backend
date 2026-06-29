@@ -928,7 +928,10 @@ def delete_account():
     session.clear()
     return jsonify({'message': 'Account deleted'}), 200
 
+with app.app_context():
+    db.create_all()
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True, port=5000)
+    app.run(debug=False, port=5000)
