@@ -28,8 +28,8 @@ CORS(app, supports_credentials=True, origins=[
 # Add these configurations to ensure cookies are handled correctly over local dev
 # Ensure this is also set for security
 app.config.update(
-    SESSION_COOKIE_SAMESITE='None',
-    SESSION_COOKIE_SECURE=True,   # ← was True, breaks on http://localhost
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=False,
     SESSION_COOKIE_HTTPONLY=True,
 )
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
