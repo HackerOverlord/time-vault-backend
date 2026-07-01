@@ -20,13 +20,16 @@ app = Flask(__name__)
 
 # --- INTEGRATION: THE BRIDGE ---
 # Allows your v0 frontend to securely request data from this Flask backend
-CORS(app, supports_credentials=True, origins=["http://localhost:3000"])
+CORS(app, supports_credentials=True, origins=[
+    "http://localhost:3000",
+    "https://time-vault-imhg.vercel.app"
+], allow_headers=["Content-Type"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 # Add these configurations to ensure cookies are handled correctly over local dev
 # Ensure this is also set for security
 app.config.update(
-    SESSION_COOKIE_SAMESITE='Lax',
-    SESSION_COOKIE_SECURE=False,   # ← was True, breaks on http://localhost
+    SESSION_COOKIE_SAMESITE='None',
+    SESSION_COOKIE_SECURE=True,   # ← was True, breaks on http://localhost
     SESSION_COOKIE_HTTPONLY=True,
 )
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
