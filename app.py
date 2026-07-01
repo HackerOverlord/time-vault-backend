@@ -23,8 +23,7 @@ app = Flask(__name__)
 CORS(app, supports_credentials=True, origins=[
     "http://localhost:3000",
     "https://time-vault-imhg.vercel.app",
-    r"https://.*\.vercel\.app"
-], allow_headers=["Content-Type"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+], allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 # Add these configurations to ensure cookies are handled correctly over local dev
 # Ensure this is also set for security
