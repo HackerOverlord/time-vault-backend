@@ -13,7 +13,8 @@ import random
 import string
 from datetime import timedelta
 from sqlalchemy import or_
-
+import jwt                          
+from functools import wraps  
 
 
 app = Flask(__name__)
@@ -43,7 +44,21 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
 
 db = SQLAlchemy(app)
 
-
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not token:
+            return jsonify({'error': 'Unauthorized'}), 401
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+            session['user_id'] = data['user_id']
+        except jwt.ExpiredSignatureError:
+            return jsonify({'error': 'Token expired'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'error': 'Unauthorized'}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 # --- SECURITY & ENCRYPTION ---
 ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY')
@@ -318,30 +333,16 @@ def get_family_members():
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
-    if not data:
-        return jsonify({"error": "No data received"}), 400
-
-    # Ensure we look for the 'email' key sent by React
     email = data.get('email')
     password = data.get('password')
-
-    print(f"Login attempt for email: {email}") # Debug helper
-
-    if not email or not password:
-        return jsonify({"error": "Email and password are required"}), 400
-
-    # Find user by email
     user = User.query.filter_by(email=email).first()
-
     if user and check_password_hash(user.password_hash, password):
-        session['user_id'] = user.id
-        session.permanent = True
-        return jsonify({
-            "message": "Login successful",
-            "user": {"id": user.id, "email": user.email}
-        }), 200
-
-    return jsonify({"error": "Access Denied: Please check your credentials."}), 401
+        token = jwt.encode({
+            'user_id': user.id,
+            'exp': datetime.utcnow() + timedelta(days=7)
+        }, app.config['SECRET_KEY'], algorithm='HS256')
+        return jsonify({"message": "Login successful", "token": token}), 200
+    return jsonify({"error": "Access Denied"}), 401
 
 @app.route('/api/register', methods=['POST'])
 def register():
