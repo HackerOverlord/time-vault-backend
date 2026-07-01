@@ -204,6 +204,7 @@ class Notification(db.Model):
 
 
 @app.route('/api/family-members', methods=['POST'])
+@token_required
 def add_member():
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -255,6 +256,7 @@ def add_member():
 
 
 @app.route('/api/family-members/<int:member_id>', methods=['DELETE'])
+@token_required
 def delete_member(member_id):
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -282,6 +284,7 @@ def delete_member(member_id):
 
 
 @app.route('/api/stats', methods=['GET'])
+@token_required
 def get_dashboard_stats():
     """Feeds data to the v0 Dashboard cards"""
     if 'user_id' not in session:
@@ -295,6 +298,7 @@ def get_dashboard_stats():
     })
 
 @app.route('/api/family-members', methods=['GET'])
+@token_required
 def get_family_members():
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
@@ -364,10 +368,14 @@ def register():
     
     db.session.add(user)
     db.session.commit()
-    session['user_id'] = user.id
-    return jsonify({'message': 'User created', 'user_id': user.id}), 201
+    token = jwt.encode({
+        'user_id': user.id,
+        'exp': datetime.utcnow() + timedelta(days=7)
+    }, app.config['SECRET_KEY'], algorithm='HS256')
+    return jsonify({'message': 'User created', 'token': token}), 201
 
 @app.route('/api/memories', methods=['POST'])
+@token_required
 def create_memory():
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -457,6 +465,7 @@ def create_memory():
     }), 201
 
 @app.route('/api/memories/shared', methods=['GET'])
+@token_required
 def get_shared_memories():
     """Fetches all capsules addressed to the currently logged-in family recipient account"""
     if 'user_id' not in session:
@@ -507,6 +516,7 @@ def get_shared_memories():
     return jsonify(result), 200
 
 @app.route('/api/heartbeat', methods=['POST'])
+@token_required
 def heartbeat():
     """Updates last_login to prevent Dead Man's Switch trigger"""
     if 'user_id' in session:
@@ -518,6 +528,7 @@ def heartbeat():
 
 
 @app.route('/api/memories', methods=['GET'])
+@token_required
 def get_memories():
     """Returns the list of time-locked vaults for the dashboard"""
     if 'user_id' not in session:
@@ -538,6 +549,7 @@ def get_memories():
 
 
 @app.route('/api/get-my-code', methods=['GET'])
+@token_required
 def get_my_code():
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -565,6 +577,7 @@ def get_my_code():
 
 
 @app.route('/api/join-family', methods=['POST'])
+@token_required
 def join_family():
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -604,6 +617,7 @@ def join_family():
 
 
 @app.route('/api/family-members/<int:member_id>', methods=['PUT'])
+@token_required
 def update_member(member_id):
 
     if 'user_id' not in session:
@@ -654,6 +668,7 @@ def update_member(member_id):
 
 
 @app.route('/api/memories/<int:memory_id>', methods=['PUT'])
+@token_required
 def update_memory(memory_id):
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -697,6 +712,7 @@ def update_memory(memory_id):
     return jsonify({'message': 'Vault updated successfully'}), 200
 
 @app.route('/api/me', methods=['GET'])
+@token_required
 def get_current_user():
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
@@ -730,6 +746,7 @@ def check_email():
 
 
 @app.route('/api/memories/<int:memory_id>', methods=['GET'])
+@token_required
 def get_single_memory(memory_id):
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -774,6 +791,7 @@ def get_single_memory(memory_id):
 
 
 @app.route('/api/vaults/<int:memory_id>', methods=['DELETE'])
+@token_required
 def delete_vault(memory_id):
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -815,6 +833,7 @@ def delete_vault(memory_id):
 
 
 @app.route('/api/me', methods=['PUT'])
+@token_required
 def update_current_user():
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -835,6 +854,7 @@ def update_current_user():
 
 
 @app.route('/api/notifications', methods=['GET'])
+@token_required
 def get_notifications():
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -849,6 +869,7 @@ def get_notifications():
     } for n in notifs]), 200
 
 @app.route('/api/notifications/read/<int:notif_id>', methods=['POST'])
+@token_required
 def mark_notification_read(notif_id):
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -860,6 +881,7 @@ def mark_notification_read(notif_id):
     return jsonify({'message': 'Marked read'}), 200
 
 @app.route('/api/notifications/read-all', methods=['POST'])
+@token_required
 def mark_all_read():
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -869,6 +891,7 @@ def mark_all_read():
     return jsonify({'message': 'All marked read'}), 200
 
 @app.route('/api/leave-family', methods=['POST'])
+@token_required
 def leave_family():
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -896,6 +919,7 @@ def leave_family():
 
 
 @app.route('/api/family-status', methods=['GET'])
+@token_required
 def family_status():
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -905,6 +929,7 @@ def family_status():
     return jsonify({'in_shared_family': member_count > 1}), 200
 
 @app.route('/api/change-password', methods=['POST'])
+@token_required
 def change_password():
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
@@ -919,6 +944,7 @@ def change_password():
     return jsonify({'message': 'Password updated successfully'}), 200
 
 @app.route('/api/delete-account', methods=['DELETE'])
+@token_required
 def delete_account():
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
