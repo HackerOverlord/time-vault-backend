@@ -15,7 +15,7 @@ from datetime import timedelta
 from sqlalchemy import or_
 import jwt                          
 from functools import wraps  
-
+from flask import g
 
 app = Flask(__name__)
 
@@ -44,6 +44,9 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
 
 db = SQLAlchemy(app)
 
+
+
+
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -52,7 +55,7 @@ def token_required(f):
             return jsonify({'error': 'Unauthorized'}), 401
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-            session['user_id'] = data['user_id']
+            g.user_id = data['user_id']  # ← use g instead of session
         except jwt.ExpiredSignatureError:
             return jsonify({'error': 'Token expired'}), 401
         except jwt.InvalidTokenError:
@@ -206,18 +209,18 @@ class Notification(db.Model):
 @app.route('/api/family-members', methods=['POST'])
 @token_required
 def add_member():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
 
     data = request.get_json()
     email_val = data.get('email')
     
 
-    user = User.query.get(session['user_id'])
+    user = User.query.get(g.user_id)
     ensure_user_has_family(user)
 
     new_member = FamilyMember(
-        user_id=session['user_id'],
+        user_id=g.user_id,
         family_id=user.family_id,
         name=data.get('name'),
         first_name=data.get('firstName'),
@@ -233,7 +236,7 @@ def add_member():
     
     db.session.add(new_member)
     db.session.commit()
-    create_notification(session['user_id'], 'member_added',
+    create_notification(g.user_id, 'member_added',
         f"Family member \"{new_member.first_name or new_member.name}\" was added successfully.")
     db.session.commit()
     
@@ -258,14 +261,14 @@ def add_member():
 @app.route('/api/family-members/<int:member_id>', methods=['DELETE'])
 @token_required
 def delete_member(member_id):
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
 
     member = FamilyMember.query.get_or_404(member_id)
 
 
 
-    user = User.query.get(session['user_id'])
+    user = User.query.get(g.user_id)
     if member.family_id != user.family_id:
         return jsonify({'error': 'Forbidden'}), 403
 
@@ -287,9 +290,9 @@ def delete_member(member_id):
 @token_required
 def get_dashboard_stats():
     """Feeds data to the v0 Dashboard cards"""
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
-    u_id = session['user_id']
+    u_id = g.user_id
     user = User.query.get(u_id)
     return jsonify({
         "totalMemories": Memory.query.filter_by(user_id=u_id, hidden_from_sender=False).count(),
@@ -300,10 +303,10 @@ def get_dashboard_stats():
 @app.route('/api/family-members', methods=['GET'])
 @token_required
 def get_family_members():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Not logged in'}), 401
     
-    user = User.query.get(session['user_id'])
+    user = User.query.get(g.user_id)
     members = FamilyMember.query.filter_by(family_id=user.family_id).all() if user.family_id else []
     result = []
     
@@ -377,7 +380,7 @@ def register():
 @app.route('/api/memories', methods=['POST'])
 @token_required
 def create_memory():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
     
     data = request.get_json()
@@ -411,7 +414,7 @@ def create_memory():
     encrypted_content = base64.b64encode(encrypted_bytes).decode()
 
     new_memory = Memory(
-        user_id=session['user_id'],
+        user_id=g.user_id,
         title=data.get('title'),
         content_encrypted=encrypted_content.encode(),  # Store encrypted as binary
         media_content=media_content,
@@ -449,7 +452,7 @@ def create_memory():
 
     if not new_memory.is_draft and new_memory.recipient_email:
         # Notify sender
-        create_notification(session['user_id'], 'vault_sent',
+        create_notification(g.user_id, 'vault_sent',
             f"You sent \"{new_memory.title}\" to {new_memory.recipient_email}.")
         # Notify recipient if they have an account
         recipient_user = User.query.filter_by(email=new_memory.recipient_email).first()
@@ -468,10 +471,10 @@ def create_memory():
 @token_required
 def get_shared_memories():
     """Fetches all capsules addressed to the currently logged-in family recipient account"""
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
         
-    current_user = User.query.get(session['user_id'])
+    current_user = User.query.get(g.user_id)
     if not current_user:
         return jsonify({'error': 'User profile not found'}), 404
         
@@ -520,7 +523,7 @@ def get_shared_memories():
 def heartbeat():
     """Updates last_login to prevent Dead Man's Switch trigger"""
     if 'user_id' in session:
-        user = User.query.get(session['user_id'])
+        user = User.query.get(g.user_id)
         user.last_login = datetime.utcnow()
         db.session.commit()
         return jsonify({'status': 'active'}), 200
@@ -531,10 +534,10 @@ def heartbeat():
 @token_required
 def get_memories():
     """Returns the list of time-locked vaults for the dashboard"""
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
     
-    u_id = session['user_id']
+    u_id = g.user_id
     memories = Memory.query.filter_by(user_id=u_id, hidden_from_sender=False).all()
     
     return jsonify([{
@@ -551,10 +554,10 @@ def get_memories():
 @app.route('/api/get-my-code', methods=['GET'])
 @token_required
 def get_my_code():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
 
-    user = User.query.get(session['user_id'])
+    user = User.query.get(g.user_id)
     ensure_user_has_family(user)
     family = Family.query.get(user.family_id)
 
@@ -579,14 +582,14 @@ def get_my_code():
 @app.route('/api/join-family', methods=['POST'])
 @token_required
 def join_family():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
 
     data = request.get_json()
     code = (data.get('invite_code') or '').strip().upper()
 
 
-    print(f"[JOIN] user_id={session['user_id']} code={code}")
+    print(f"[JOIN] user_id={g.user_id} code={code}")
 
 
     invite = InviteCode.query.filter_by(code=code, used=False).first()
@@ -595,7 +598,7 @@ def join_family():
     if invite.expires_at < datetime.utcnow():
         return jsonify({'message': 'This invite code has expired.'}), 400
 
-    user = User.query.get(session['user_id'])
+    user = User.query.get(g.user_id)
 
     print(f"[JOIN] invite.created_by={invite.created_by} joining user.id={user.id} same={invite.created_by == user.id}")
 
@@ -605,7 +608,7 @@ def join_family():
     user.family_id = invite.family_id
     invite.used = True
     db.session.commit()
-    create_notification(session['user_id'], 'family_joined',
+    create_notification(g.user_id, 'family_joined',
         f"You successfully joined a family using an invite code.")
     # Also notify the invite creator
     create_notification(invite.created_by, 'member_joined',
@@ -620,15 +623,15 @@ def join_family():
 @token_required
 def update_member(member_id):
 
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
 
     member = FamilyMember.query.get_or_404(member_id)
     data = request.get_json()
     
-    user = User.query.get(session['user_id'])
+    user = User.query.get(g.user_id)
     # AFTER
-    if member.family_id != user.family_id and member.user_id != session['user_id']:
+    if member.family_id != user.family_id and member.user_id != g.user_id:
         return jsonify({'error': 'Forbidden'}), 403
     
     member.first_name = data.get('firstName', member.first_name)
@@ -670,12 +673,12 @@ def update_member(member_id):
 @app.route('/api/memories/<int:memory_id>', methods=['PUT'])
 @token_required
 def update_memory(memory_id):
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
     
     memory = Memory.query.get_or_404(memory_id)
     
-    if memory.user_id != session['user_id']:
+    if memory.user_id != g.user_id:
         return jsonify({'error': 'Forbidden'}), 403
     
     data = request.get_json()
@@ -714,11 +717,11 @@ def update_memory(memory_id):
 @app.route('/api/me', methods=['GET'])
 @token_required
 def get_current_user():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Not logged in'}), 401
     
 
-    user = User.query.get(session['user_id'])
+    user = User.query.get(g.user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
         
@@ -748,14 +751,14 @@ def check_email():
 @app.route('/api/memories/<int:memory_id>', methods=['GET'])
 @token_required
 def get_single_memory(memory_id):
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
         
     memory = Memory.query.get_or_404(memory_id)
-    current_user = User.query.get(session['user_id'])
+    current_user = User.query.get(g.user_id)
     
     # Allow access if user is owner OR recipient
-    is_owner = memory.user_id == session['user_id']
+    is_owner = memory.user_id == g.user_id
     is_recipient = current_user and memory.recipient_email == current_user.email
     
     if not is_owner and not is_recipient:
@@ -793,13 +796,13 @@ def get_single_memory(memory_id):
 @app.route('/api/vaults/<int:memory_id>', methods=['DELETE'])
 @token_required
 def delete_vault(memory_id):
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
 
     memory = Memory.query.get_or_404(memory_id)
-    current_user = User.query.get(session['user_id'])
+    current_user = User.query.get(g.user_id)
 
-    is_owner = memory.user_id == session['user_id']
+    is_owner = memory.user_id == g.user_id
     is_recipient = current_user and memory.recipient_email == current_user.email
 
     if not is_owner and not is_recipient:
@@ -808,7 +811,7 @@ def delete_vault(memory_id):
     try:
         if is_recipient:
             memory.hidden_from_recipient = True
-            create_notification(session['user_id'], 'vault_deleted',
+            create_notification(g.user_id, 'vault_deleted',
                 f"You removed \"{memory.title}\" from your inbox.")
             db.session.commit()
             return jsonify({"message": "Removed from your inbox."}), 200
@@ -816,14 +819,14 @@ def delete_vault(memory_id):
             was_sent = bool(memory.recipient_email) and not memory.is_draft
             if was_sent:
                 memory.hidden_from_sender = True
-                create_notification(session['user_id'], 'vault_deleted',
+                create_notification(g.user_id, 'vault_deleted',
                     f"You removed \"{memory.title}\" from your vault.")
                 db.session.commit()
                 return jsonify({"message": "Vault removed from your view."}), 200
             else:
                 title = memory.title
                 db.session.delete(memory)
-                create_notification(session['user_id'], 'vault_deleted',
+                create_notification(g.user_id, 'vault_deleted',
                     f"You permanently deleted \"{title}\".")
                 db.session.commit()
                 return jsonify({"message": "Vault deleted."}), 200                           
@@ -835,11 +838,11 @@ def delete_vault(memory_id):
 @app.route('/api/me', methods=['PUT'])
 @token_required
 def update_current_user():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
     
     
-    user = User.query.get(session['user_id'])
+    user = User.query.get(g.user_id)
     data = request.get_json()
     
     if data.get('avatar'):
@@ -856,9 +859,9 @@ def update_current_user():
 @app.route('/api/notifications', methods=['GET'])
 @token_required
 def get_notifications():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
-    notifs = Notification.query.filter_by(user_id=session['user_id'])\
+    notifs = Notification.query.filter_by(user_id=g.user_id)\
         .order_by(Notification.created_at.desc()).limit(50).all()
     return jsonify([{
         'id': n.id,
@@ -871,10 +874,10 @@ def get_notifications():
 @app.route('/api/notifications/read/<int:notif_id>', methods=['POST'])
 @token_required
 def mark_notification_read(notif_id):
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
     notif = Notification.query.get_or_404(notif_id)
-    if notif.user_id != session['user_id']:
+    if notif.user_id != g.user_id:
         return jsonify({'error': 'Forbidden'}), 403
     notif.is_read = True
     db.session.commit()
@@ -883,9 +886,9 @@ def mark_notification_read(notif_id):
 @app.route('/api/notifications/read-all', methods=['POST'])
 @token_required
 def mark_all_read():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
-    Notification.query.filter_by(user_id=session['user_id'], is_read=False)\
+    Notification.query.filter_by(user_id=g.user_id, is_read=False)\
         .update({'is_read': True})
     db.session.commit()
     return jsonify({'message': 'All marked read'}), 200
@@ -893,9 +896,9 @@ def mark_all_read():
 @app.route('/api/leave-family', methods=['POST'])
 @token_required
 def leave_family():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
-    user = User.query.get(session['user_id'])
+    user = User.query.get(g.user_id)
     if not user.family_id:
         return jsonify({'error': 'Not in a family'}), 400
     
@@ -912,7 +915,7 @@ def leave_family():
         user_id=user.id
     ).update({'family_id': new_family.id})
     
-    create_notification(session['user_id'], 'family_left',
+    create_notification(g.user_id, 'family_left',
         "You've left the shared family. Your data remains intact.")
     db.session.commit()
     return jsonify({'message': 'Left family successfully'}), 200
@@ -921,9 +924,9 @@ def leave_family():
 @app.route('/api/family-status', methods=['GET'])
 @token_required
 def family_status():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
-    user = User.query.get(session['user_id'])
+    user = User.query.get(g.user_id)
     # Count how many users share this family_id
     member_count = User.query.filter_by(family_id=user.family_id).count()
     return jsonify({'in_shared_family': member_count > 1}), 200
@@ -931,10 +934,10 @@ def family_status():
 @app.route('/api/change-password', methods=['POST'])
 @token_required
 def change_password():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
     data = request.get_json()
-    user = User.query.get(session['user_id'])
+    user = User.query.get(g.user_id)
     if not check_password_hash(user.password_hash, data.get('current_password', '')):
         return jsonify({'error': 'Current password is incorrect'}), 400
     if len(data.get('new_password', '')) < 8:
@@ -946,10 +949,10 @@ def change_password():
 @app.route('/api/delete-account', methods=['DELETE'])
 @token_required
 def delete_account():
-    if 'user_id' not in session:
+    if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
     data = request.get_json()
-    user = User.query.get(session['user_id'])
+    user = User.query.get(g.user_id)
     if not check_password_hash(user.password_hash, data.get('password', '')):
         return jsonify({'error': 'Incorrect password'}), 400
     # Delete user's data
