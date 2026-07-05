@@ -819,7 +819,7 @@ def delete_vault(memory_id):
             was_sent = bool(memory.recipient_email) and not memory.is_draft
             if was_sent:
                 memory.hidden_from_sender = True
-                if memory.status == 'locked':  # not yet released — hide from recipient too
+                if not memory.is_released:  # not yet released — hide from recipient too
                     memory.hidden_from_recipient = True
                 create_notification(g.user_id, 'vault_deleted',
                     f"You removed \"{memory.title}\" from your vault.")
