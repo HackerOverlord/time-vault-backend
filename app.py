@@ -522,7 +522,7 @@ def get_shared_memories():
 @token_required
 def heartbeat():
     """Updates last_login to prevent Dead Man's Switch trigger"""
-    if 'user_id' in session:
+    if hasattr(g, 'user_id'):
         user = User.query.get(g.user_id)
         user.last_login = datetime.utcnow()
         db.session.commit()
@@ -735,6 +735,7 @@ def get_current_user():
 
 
 @app.route('/api/check-email', methods=['POST'])
+@token_required
 def check_email():
     data = request.get_json()
     email = data.get('email')
@@ -959,7 +960,7 @@ def delete_account():
         return jsonify({'error': 'Incorrect password'}), 400
     # Delete user's data
     Memory.query.filter_by(user_id=user.id).delete()
-    FamilyMember.query.filter_by(family_id=user.family_id).delete()
+    FamilyMember.query.filter_by(user_id=user.id).delete()
     Notification.query.filter_by(user_id=user.id).delete()
     db.session.delete(user)
     db.session.commit()
