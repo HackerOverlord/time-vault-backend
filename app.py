@@ -5,14 +5,14 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
-from datetime import datetime
+from datetime import datetime, date
 import os
 import secrets
 import base64
 import random
 import string
 from datetime import timedelta
-from sqlalchemy import or_
+from sqlalchemy import or_, UniqueConstraint, func
 import jwt                          
 from functools import wraps  
 from flask import g
@@ -111,6 +111,745 @@ def create_notification(user_id, type, message):
     # No commit here — caller commits
 
 
+# --- V1 HELPERS ---
+
+def vault_forbidden(msg='Forbidden'):
+    """Return a vault-scoped 403 JSON response without touching global error handlers."""
+    return jsonify({'error': msg}), 403
+
+
+def require_vault_member(vault_id):
+    """Return the VaultMember row for g.user_id in vault_id, or a 403 tuple.
+    Caller must check: result = require_vault_member(id); if isinstance(result, tuple): return result
+    """
+    vm = VaultMember.query.filter_by(vault_id=vault_id, user_id=g.user_id).first()
+    if not vm:
+        return vault_forbidden()
+    return vm
+
+
+def require_vault_owner(vault_id):
+    """Return the VaultMember row if g.user_id is the owner, or a 403 tuple."""
+    result = require_vault_member(vault_id)
+    if isinstance(result, tuple):
+        return result
+    if result.role != 'owner':
+        return vault_forbidden()
+    return result
+
+
+def generate_invite_code():
+    """Generate a unique 6-character uppercase alphanumeric invite code."""
+    chars = string.ascii_uppercase + string.digits
+    for _ in range(10):
+        code = ''.join(secrets.choice(chars) for _ in range(6))
+        if not Vault.query.filter_by(invite_code=code).first():
+            return code
+    raise RuntimeError('Failed to generate unique invite code after 10 attempts')
+
+
+def serialize_post(post, author, vault, liked_set):
+    """Serialise a Post row to the canonical V1 API response shape.
+    author    — User row for post.author_id
+    vault     — Vault row for post.vault_id
+    liked_set — set of post_id integers the requesting user has liked
+    """
+    return {
+        'id':            str(post.id),
+        'vault_id':      str(post.vault_id),
+        'vault_name':    vault.name,
+        'author_id':     str(post.author_id),
+        'author_name':   author.name,
+        'author_avatar': author.avatar,
+        'caption':       post.caption,
+        'media_type':    post.media_type,
+        'media_url':     post.media_url,
+        'unlock_at':     post.unlock_at.isoformat() if post.unlock_at else None,
+        'is_unlocked':   post.is_unlocked,
+        'posted_at':     post.posted_at.isoformat() if post.posted_at else None,
+        'created_at':    post.created_at.isoformat(),
+        'like_count':    post.like_count,
+        'comment_count': post.comment_count,
+        'has_liked':     post.id in liked_set,
+    }
+
+
+def serialize_comment(comment, author):
+    return {
+        'id':            str(comment.id),
+        'author_id':     str(comment.author_id),
+        'author_name':   author.name,
+        'author_avatar': author.avatar,
+        'body':          comment.body,
+        'created_at':    comment.created_at.isoformat(),
+    }
+
+
+# --- V1 ROUTES: VAULTS (3A) ---
+
+@app.route('/api/vaults', methods=['GET'])
+@token_required
+def get_vaults():
+    memberships = VaultMember.query.filter_by(user_id=g.user_id).all()
+    result = []
+    for vm in memberships:
+        vault = Vault.query.get(vm.vault_id)
+        if not vault:
+            continue
+        member_count = VaultMember.query.filter_by(vault_id=vault.id).count()
+        if vm.last_seen_at:
+            unread = Post.query.filter(
+                Post.vault_id == vault.id,
+                Post.is_unlocked == True,
+                Post.posted_at > vm.last_seen_at,
+                Post.author_id != g.user_id
+            ).count()
+        else:
+            unread = 0
+        entry = {
+            'id':           str(vault.id),
+            'name':         vault.name,
+            'created_by':   str(vault.created_by),
+            'created_at':   vault.created_at.isoformat(),
+            'member_count': member_count,
+            'unread_count': unread,
+            'user_role':    vm.role,
+        }
+        if vm.role == 'owner':
+            entry['invite_code'] = vault.invite_code
+        result.append(entry)
+    return jsonify(result), 200
+
+
+@app.route('/api/vaults', methods=['POST'])
+@token_required
+def create_vault():
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'Vault name is required'}), 400
+    if len(name) > 50:
+        return jsonify({'error': 'Vault name cannot exceed 50 characters'}), 400
+    now = datetime.utcnow()
+    vault = Vault(
+        name=name,
+        invite_code=generate_invite_code(),
+        created_by=g.user_id,
+        created_at=now,
+    )
+    db.session.add(vault)
+    db.session.flush()  # vault.id available before commit
+    owner = VaultMember(
+        vault_id=vault.id,
+        user_id=g.user_id,
+        role='owner',
+        joined_at=now,
+        invited_by=None,
+        last_seen_at=now,
+    )
+    db.session.add(owner)
+    db.session.commit()
+    return jsonify({
+        'id':           str(vault.id),
+        'name':         vault.name,
+        'invite_code':  vault.invite_code,
+        'created_by':   str(vault.created_by),
+        'created_at':   vault.created_at.isoformat(),
+        'member_count': 1,
+        'unread_count': 0,
+        'user_role':    'owner',
+    }), 201
+
+
+@app.route('/api/vaults/<int:vault_id>', methods=['DELETE'])
+@token_required
+def delete_vault_v1(vault_id):
+    vault = Vault.query.get(vault_id)
+    if not vault:
+        return jsonify({'error': 'Vault not found'}), 404
+    result = require_vault_owner(vault_id)
+    if isinstance(result, tuple):
+        return result
+    confirm = (request.get_json() or {}).get('confirm_name', '')
+    if confirm != vault.name:
+        return jsonify({'error': 'Vault name confirmation does not match'}), 400
+    # Notify non-owner members before deletion
+    members = VaultMember.query.filter_by(vault_id=vault_id).all()
+    owner = User.query.get(g.user_id)
+    for m in members:
+        if m.user_id != g.user_id:
+            create_notification(
+                m.user_id, 'vault_deleted',
+                f'{owner.name} deleted {vault.name}'
+            )
+    # Hard-delete all content in dependency order
+    post_ids = [p.id for p in Post.query.filter_by(vault_id=vault_id).all()]
+    if post_ids:
+        PostLike.query.filter(PostLike.post_id.in_(post_ids)).delete(synchronize_session=False)
+        PostComment.query.filter(PostComment.post_id.in_(post_ids)).delete(synchronize_session=False)
+    Post.query.filter_by(vault_id=vault_id).delete(synchronize_session=False)
+    VaultMember.query.filter_by(vault_id=vault_id).delete(synchronize_session=False)
+    db.session.delete(vault)
+    db.session.commit()
+    return '', 204
+
+
+@app.route('/api/vaults/<int:vault_id>', methods=['PUT'])
+@token_required
+def rename_vault(vault_id):
+    vault = Vault.query.get(vault_id)
+    if not vault:
+        return jsonify({'error': 'Vault not found'}), 404
+    result = require_vault_owner(vault_id)
+    if isinstance(result, tuple):
+        return result
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'Vault name is required'}), 400
+    if len(name) > 50:
+        return jsonify({'error': 'Vault name cannot exceed 50 characters'}), 400
+    vault.name = name
+    db.session.commit()
+    vm = result  # already the VaultMember from require_vault_owner
+    member_count = VaultMember.query.filter_by(vault_id=vault.id).count()
+    return jsonify({
+        'id':           str(vault.id),
+        'name':         vault.name,
+        'invite_code':  vault.invite_code,
+        'created_by':   str(vault.created_by),
+        'created_at':   vault.created_at.isoformat(),
+        'member_count': member_count,
+        'unread_count': 0,
+        'user_role':    vm.role,
+    }), 200
+
+
+@app.route('/api/vaults/<int:vault_id>/seen', methods=['POST'])
+@token_required
+def mark_vault_seen(vault_id):
+    if not Vault.query.get(vault_id):
+        return jsonify({'error': 'Vault not found'}), 404
+    result = require_vault_member(vault_id)
+    if isinstance(result, tuple):
+        return result
+    result.last_seen_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'last_seen_at': result.last_seen_at.isoformat()}), 200
+
+
+# --- V1 ROUTES: MEMBERSHIP + INVITES (3B) ---
+
+@app.route('/api/vaults/<int:vault_id>/members', methods=['GET'])
+@token_required
+def get_vault_members(vault_id):
+    if not Vault.query.get(vault_id):
+        return jsonify({'error': 'Vault not found'}), 404
+    result = require_vault_member(vault_id)
+    if isinstance(result, tuple):
+        return result
+    members = VaultMember.query.filter_by(vault_id=vault_id).all()
+    out = []
+    for m in members:
+        user = User.query.get(m.user_id)
+        if not user:
+            continue
+        out.append({
+            'user_id':   str(user.id),
+            'name':      user.name,
+            'avatar':    user.avatar if hasattr(user, 'avatar') else None,
+            'role':      m.role,
+            'joined_at': m.joined_at.isoformat(),
+        })
+    return jsonify(out), 200
+
+
+@app.route('/api/vaults/<int:vault_id>/members/<int:user_id>', methods=['DELETE'])
+@token_required
+def remove_vault_member(vault_id, user_id):
+    if not Vault.query.get(vault_id):
+        return jsonify({'error': 'Vault not found'}), 404
+    result = require_vault_owner(vault_id)
+    if isinstance(result, tuple):
+        return result
+    if user_id == g.user_id:
+        return jsonify({'error': 'Vault owners cannot remove themselves. Delete the vault instead.'}), 400
+    target = VaultMember.query.filter_by(vault_id=vault_id, user_id=user_id).first()
+    if not target:
+        return jsonify({'error': 'Member not found in this vault'}), 404
+    db.session.delete(target)
+    db.session.commit()
+    return '', 204
+
+
+@app.route('/api/vaults/<int:vault_id>/leave', methods=['DELETE'])
+@token_required
+def leave_vault(vault_id):
+    if not Vault.query.get(vault_id):
+        return jsonify({'error': 'Vault not found'}), 404
+    result = require_vault_member(vault_id)
+    if isinstance(result, tuple):
+        return result
+    vm = result
+    if vm.role == 'owner':
+        return jsonify({'error': 'Vault owners cannot leave. Delete the vault instead.'}), 400
+    db.session.delete(vm)
+    db.session.commit()
+    return '', 204
+
+
+@app.route('/api/vaults/join', methods=['POST'])
+@token_required
+def join_vault():
+    data = request.get_json() or {}
+    raw = data.get('invite_code', '')
+    # Normalise: strip whitespace, remove hyphens, uppercase
+    normalised = raw.replace('-', '').replace(' ', '').upper()
+    # Reject before querying unless exactly 6 alphanumeric characters
+    if len(normalised) != 6 or not normalised.isalnum():
+        return jsonify({'error': 'Invalid invite code'}), 400
+    vault = Vault.query.filter_by(invite_code=normalised).first()
+    if not vault:
+        return jsonify({'error': 'Invalid invite code'}), 400
+    existing = VaultMember.query.filter_by(
+        vault_id=vault.id, user_id=g.user_id
+    ).first()
+    if existing:
+        return jsonify({'error': 'You are already a member of this vault'}), 400
+    now = datetime.utcnow()
+    member = VaultMember(
+        vault_id=vault.id,
+        user_id=g.user_id,
+        role='member',
+        joined_at=now,
+        invited_by=None,
+        last_seen_at=now,
+    )
+    db.session.add(member)
+    db.session.commit()
+    member_count = VaultMember.query.filter_by(vault_id=vault.id).count()
+    return jsonify({
+        'vault': {
+            'id':           str(vault.id),
+            'name':         vault.name,
+            'member_count': member_count,
+            'user_role':    'member',
+        },
+        'message': f'You joined {vault.name}',
+    }), 201
+
+
+@app.route('/api/vaults/<int:vault_id>/invite/regenerate', methods=['POST'])
+@token_required
+def regenerate_invite_code(vault_id):
+    vault = Vault.query.get(vault_id)
+    if not vault:
+        return jsonify({'error': 'Vault not found'}), 404
+    result = require_vault_owner(vault_id)
+    if isinstance(result, tuple):
+        return result
+    vault.invite_code = generate_invite_code()
+    db.session.commit()
+    return jsonify({'invite_code': vault.invite_code}), 200
+
+
+# --- V1 ROUTES: POSTS (3C) ---
+
+_ALLOWED_MEDIA_TYPES = {'video', 'image', 'text'}
+
+# Fields the frontend currently sends that do not exist in the V1 backend contract.
+# Rejected explicitly so Milestone 4 wiring mistakes surface immediately.
+_REJECTED_POST_FIELDS = {'group_id', 'recipient_ids'}
+
+
+@app.route('/api/posts', methods=['GET'])
+@token_required
+def get_posts():
+    vault_id_param = request.args.get('vault_id', type=int)
+
+    if vault_id_param is not None:
+        # Explicit vault filter: must exist, requester must be a member.
+        if not Vault.query.get(vault_id_param):
+            return jsonify({'error': 'Vault not found'}), 404
+        result = require_vault_member(vault_id_param)
+        if isinstance(result, tuple):
+            return result
+        # Scope to this single vault.
+        member_vault_ids = [vault_id_param]
+    else:
+        member_vault_ids = [
+            vm.vault_id
+            for vm in VaultMember.query.filter_by(user_id=g.user_id).all()
+        ]
+
+    if not member_vault_ids:
+        return jsonify([]), 200
+
+    posts = (
+        Post.query
+        .filter(
+            Post.vault_id.in_(member_vault_ids),
+            Post.is_unlocked == True,
+        )
+        .order_by(Post.posted_at.desc())
+        .all()
+    )
+
+    if not posts:
+        return jsonify([]), 200
+
+    # Bulk liked-post lookup — one query regardless of feed size.
+    post_ids = [p.id for p in posts]
+    liked_set = {
+        pl.post_id
+        for pl in PostLike.query.filter(
+            PostLike.post_id.in_(post_ids),
+            PostLike.user_id == g.user_id,
+        ).all()
+    }
+
+    # Author and vault rows — keyed by id to avoid per-post queries.
+    author_ids = {p.author_id for p in posts}
+    vault_ids  = {p.vault_id  for p in posts}
+    authors = {u.id: u for u in User.query.filter(User.id.in_(author_ids)).all()}
+    vaults  = {v.id: v for v in Vault.query.filter(Vault.id.in_(vault_ids)).all()}
+
+    result = []
+    for post in posts:
+        author = authors.get(post.author_id)
+        vault  = vaults.get(post.vault_id)
+        if not author or not vault:
+            continue
+        result.append(serialize_post(post, author, vault, liked_set))
+
+    return jsonify(result), 200
+
+
+@app.route('/api/vaults/<int:vault_id>/posts', methods=['POST'])
+@token_required
+def create_post(vault_id):
+    vault = Vault.query.get(vault_id)
+    if not vault:
+        return jsonify({'error': 'Vault not found'}), 404
+
+    result = require_vault_member(vault_id)
+    if isinstance(result, tuple):
+        return result
+
+    data = request.get_json() or {}
+
+    # Reject legacy frontend fields explicitly.
+    rejected = _REJECTED_POST_FIELDS & set(data.keys())
+    if rejected:
+        return jsonify({
+            'error': f'Unsupported field(s): {", ".join(sorted(rejected))}. '
+                     f'Use POST /api/vaults/<id>/posts with vault_id in the URL.'
+        }), 400
+
+    media_type = (data.get('media_type') or '').strip()
+    if media_type not in _ALLOWED_MEDIA_TYPES:
+        return jsonify({'error': 'media_type must be one of: video, image, text'}), 400
+
+    caption   = data.get('caption')
+    media_url = data.get('media_url')
+
+    # Caption validation.
+    if media_type == 'text':
+        if not caption or not str(caption).strip():
+            return jsonify({'error': 'Caption is required for text posts'}), 400
+    if caption and len(str(caption)) > 500:
+        return jsonify({'error': 'Caption cannot exceed 500 characters'}), 400
+
+    # media_url validation.
+    if media_type == 'video':
+        if not media_url or not str(media_url).startswith('data:video/'):
+            return jsonify({'error': 'media_url must be a valid video data URI for video posts'}), 400
+    elif media_type == 'image':
+        if not media_url or not str(media_url).startswith('data:image/'):
+            return jsonify({'error': 'media_url must be a valid image data URI for image posts'}), 400
+    else:  # text
+        if media_url is not None:
+            return jsonify({'error': 'media_url must be null or absent for text posts'}), 400
+
+    # unlock_at validation.
+    unlock_at_str = data.get('unlock_at')
+    unlock_dt = None
+    if unlock_at_str:
+        try:
+            unlock_dt = datetime.fromisoformat(str(unlock_at_str))
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid unlock date format'}), 400
+        if unlock_dt.date() <= date.today():
+            return jsonify({'error': 'Unlock date must be at least tomorrow'}), 400
+
+    now = datetime.utcnow()
+    if unlock_dt:
+        # Time capsule post.
+        post = Post(
+            vault_id=vault_id,
+            author_id=g.user_id,
+            caption=caption,
+            media_type=media_type,
+            media_url=media_url,
+            unlock_at=unlock_dt,
+            is_unlocked=False,
+            posted_at=None,
+            created_at=now,
+        )
+    else:
+        # Immediate post.
+        post = Post(
+            vault_id=vault_id,
+            author_id=g.user_id,
+            caption=caption,
+            media_type=media_type,
+            media_url=media_url,
+            unlock_at=None,
+            is_unlocked=True,
+            posted_at=now,
+            created_at=now,
+        )
+
+    db.session.add(post)
+    db.session.commit()
+
+    author = User.query.get(g.user_id)
+    return jsonify(serialize_post(post, author, vault, set())), 201
+
+
+@app.route('/api/posts/<int:post_id>', methods=['DELETE'])
+@token_required
+def delete_post(post_id):
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({'error': 'Post not found'}), 404
+
+    # Confirm vault membership before revealing any post details.
+    result = require_vault_member(post.vault_id)
+    if isinstance(result, tuple):
+        return result
+    vm = result
+
+    if post.author_id != g.user_id and vm.role != 'owner':
+        return vault_forbidden('You do not have permission to delete this post')
+
+    # Hard-delete dependents before the post itself.
+    PostLike.query.filter_by(post_id=post_id).delete(synchronize_session=False)
+    PostComment.query.filter_by(post_id=post_id).delete(synchronize_session=False)
+    db.session.delete(post)
+    db.session.commit()
+    return '', 204
+
+
+# --- V1 ROUTES: LIKES + COMMENTS (3D) ---
+
+@app.route('/api/posts/<int:post_id>/like', methods=['POST'])
+@token_required
+def like_post(post_id):
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({'error': 'Post not found'}), 404
+    result = require_vault_member(post.vault_id)
+    if isinstance(result, tuple):
+        return result
+    existing = PostLike.query.filter_by(post_id=post_id, user_id=g.user_id).first()
+    if existing:
+        return jsonify({'error': 'You have already liked this post'}), 400
+    like = PostLike(post_id=post_id, user_id=g.user_id, created_at=datetime.utcnow())
+    post.like_count += 1
+    db.session.add(like)
+    db.session.commit()
+    return jsonify({'like_count': post.like_count}), 201
+
+
+@app.route('/api/posts/<int:post_id>/like', methods=['DELETE'])
+@token_required
+def unlike_post(post_id):
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({'error': 'Post not found'}), 404
+    result = require_vault_member(post.vault_id)
+    if isinstance(result, tuple):
+        return result
+    like = PostLike.query.filter_by(post_id=post_id, user_id=g.user_id).first()
+    if not like:
+        return jsonify({'error': 'You have not liked this post'}), 400
+    db.session.delete(like)
+    post.like_count = max(0, post.like_count - 1)
+    db.session.commit()
+    return jsonify({'like_count': post.like_count}), 200
+
+
+@app.route('/api/posts/<int:post_id>/comments', methods=['GET'])
+@token_required
+def get_comments(post_id):
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({'error': 'Post not found'}), 404
+    result = require_vault_member(post.vault_id)
+    if isinstance(result, tuple):
+        return result
+    comments = (
+        PostComment.query
+        .filter_by(post_id=post_id)
+        .order_by(PostComment.created_at.asc())
+        .all()
+    )
+    author_ids = {c.author_id for c in comments}
+    authors = {u.id: u for u in User.query.filter(User.id.in_(author_ids)).all()}
+    return jsonify([
+        serialize_comment(c, authors[c.author_id])
+        for c in comments
+        if c.author_id in authors
+    ]), 200
+
+
+@app.route('/api/posts/<int:post_id>/comments', methods=['POST'])
+@token_required
+def create_comment(post_id):
+    post = Post.query.get(post_id)
+    if not post:
+        return jsonify({'error': 'Post not found'}), 404
+    result = require_vault_member(post.vault_id)
+    if isinstance(result, tuple):
+        return result
+    data = request.get_json() or {}
+    body = (data.get('body') or '').strip()
+    if not body:
+        return jsonify({'error': 'Comment body is required'}), 400
+    if len(body) > 500:
+        return jsonify({'error': 'Comment cannot exceed 500 characters'}), 400
+    now = datetime.utcnow()
+    comment = PostComment(post_id=post_id, author_id=g.user_id, body=body, created_at=now)
+    post.comment_count += 1
+    db.session.add(comment)
+    if g.user_id != post.author_id:
+        commenter = User.query.get(g.user_id)
+        vault = Vault.query.get(post.vault_id)
+        create_notification(
+            post.author_id,
+            'comment_received',
+            f'{commenter.name} commented on your post in {vault.name}.'
+        )
+    db.session.commit()
+    author = User.query.get(g.user_id)
+    return jsonify(serialize_comment(comment, author)), 201
+
+
+@app.route('/api/comments/<int:comment_id>', methods=['DELETE'])
+@token_required
+def delete_comment(comment_id):
+    comment = PostComment.query.get(comment_id)
+    if not comment:
+        return jsonify({'error': 'Comment not found'}), 404
+    post = Post.query.get(comment.post_id)
+    result = require_vault_member(post.vault_id)
+    if isinstance(result, tuple):
+        return result
+    vm = result
+    if comment.author_id != g.user_id and vm.role != 'owner':
+        return vault_forbidden('You do not have permission to delete this comment')
+    db.session.delete(comment)
+    post.comment_count = max(0, post.comment_count - 1)
+    db.session.commit()
+    return '', 204
+
+
+# --- V1 ROUTES: DASHBOARD (3E) ---
+
+@app.route('/api/dashboard', methods=['GET'])
+@token_required
+def get_dashboard():
+    # ── Vault memberships for this user ───────────────────────────────────────
+    memberships = VaultMember.query.filter_by(user_id=g.user_id).all()
+    if not memberships:
+        return jsonify({'vaults': [], 'upcoming_capsules': []}), 200
+
+    vault_ids = [vm.vault_id for vm in memberships]
+    vm_by_vault = {vm.vault_id: vm for vm in memberships}
+
+    # ── Load vault rows ────────────────────────────────────────────────────────
+    vaults = {v.id: v for v in Vault.query.filter(Vault.id.in_(vault_ids)).all()}
+
+    # ── member_count: one grouped query instead of N separate .count() calls ──
+    count_rows = (
+        db.session.query(VaultMember.vault_id, func.count(VaultMember.id))
+        .filter(VaultMember.vault_id.in_(vault_ids))
+        .group_by(VaultMember.vault_id)
+        .all()
+    )
+    member_counts = {vault_id: count for vault_id, count in count_rows}
+
+    # ── Build vault card list ─────────────────────────────────────────────────
+    vault_cards = []
+    for vm in memberships:
+        vault = vaults.get(vm.vault_id)
+        if not vault:
+            continue
+
+        # Unread count: posts in this vault that appeared after the user's
+        # last visit, are currently visible, and were authored by someone else.
+        # NOTE: excluding own posts (Post.author_id != g.user_id) is an
+        # implementation decision — PRD/TDD only specify "posts since last visit".
+        # Rationale: a user cannot "unread" content they authored themselves.
+        # This exclusion was explicitly approved during the unread-count
+        # reconciliation and must remain consistent across all unread queries.
+        if vm.last_seen_at is None:
+            unread = 0
+        else:
+            unread = Post.query.filter(
+                Post.vault_id == vm.vault_id,
+                Post.is_unlocked == True,
+                Post.posted_at > vm.last_seen_at,
+                Post.author_id != g.user_id,  # implementation decision — see above
+            ).count()
+
+        vault_cards.append({
+            'id':           str(vault.id),
+            'name':         vault.name,
+            'member_count': member_counts.get(vm.vault_id, 0),
+            'unread_count': unread,
+            'user_role':    vm.role,
+        })
+
+    # ── Upcoming capsules: only the requesting user's own pending capsules ─────
+    capsules = (
+        Post.query
+        .filter(
+            Post.author_id == g.user_id,
+            Post.is_unlocked == False,
+            Post.unlock_at.isnot(None),  # defensive: capsules must have an unlock date
+        )
+        .order_by(Post.unlock_at.asc())
+        .all()
+    )
+
+    # Cache vault names for capsule entries to avoid repeated queries.
+    vault_cache = dict(vaults)  # already loaded above
+    for cap in capsules:
+        if cap.vault_id not in vault_cache:
+            v = Vault.query.get(cap.vault_id)
+            if v:
+                vault_cache[cap.vault_id] = v
+
+    now = datetime.utcnow()
+    upcoming = []
+    for cap in capsules:
+        vault = vault_cache.get(cap.vault_id)
+        if not vault:
+            continue
+        days_until_unlock = max(0, (cap.unlock_at - now).days)
+        upcoming.append({
+            'post_id':          str(cap.id),
+            'vault_id':         str(cap.vault_id),
+            'vault_name':       vault.name,
+            'unlock_at':        cap.unlock_at.isoformat(),
+            'days_until_unlock': days_until_unlock,
+        })
+
+    return jsonify({'vaults': vault_cards, 'upcoming_capsules': upcoming}), 200
+
+
 def get_mime_type(filename):
     if not filename:
         return 'data:application/octet-stream'
@@ -201,6 +940,78 @@ class Notification(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+# --- NEW V1 MODELS ---
+
+class Vault(db.Model):
+    id          = db.Column(db.Integer, primary_key=True)
+    name        = db.Column(db.String(50), nullable=False)
+    invite_code = db.Column(db.String(6), unique=True, nullable=False)
+    created_by  = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+class VaultMember(db.Model):
+    id           = db.Column(db.Integer, primary_key=True)
+    vault_id     = db.Column(db.Integer, db.ForeignKey('vault.id'), nullable=False)
+    user_id      = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    role         = db.Column(db.String(20), nullable=False, default='member')
+    joined_at    = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    invited_by   = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    last_seen_at = db.Column(db.DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('vault_id', 'user_id', name='uq_vault_member'),
+    )
+
+
+class Post(db.Model):
+    id            = db.Column(db.Integer, primary_key=True)
+    vault_id      = db.Column(db.Integer, db.ForeignKey('vault.id'), nullable=False)
+    author_id     = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    caption       = db.Column(db.Text, nullable=True)
+    media_type    = db.Column(db.String(20), nullable=False)
+    media_url     = db.Column(db.Text, nullable=True)
+    unlock_at     = db.Column(db.DateTime, nullable=True)
+    is_unlocked   = db.Column(db.Boolean, nullable=False, default=True)
+    posted_at     = db.Column(db.DateTime, nullable=True)
+    created_at    = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    like_count    = db.Column(db.Integer, nullable=False, default=0)
+    comment_count = db.Column(db.Integer, nullable=False, default=0)
+
+
+class PostLike(db.Model):
+    id         = db.Column(db.Integer, primary_key=True)
+    post_id    = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=False)
+    user_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('post_id', 'user_id', name='uq_post_like'),
+    )
+
+
+class PostComment(db.Model):
+    id         = db.Column(db.Integer, primary_key=True)
+    post_id    = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=False)
+    author_id  = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    body       = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+class DigestDelivery(db.Model):
+    """Records that a new_post digest was delivered to a user for a specific
+    vault on a specific UTC calendar date. Used by unlock_job.py to prevent
+    duplicate digest notifications within the same UTC day.
+    """
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    vault_id    = db.Column(db.Integer, db.ForeignKey('vault.id'), nullable=False)
+    digest_date = db.Column(db.Date, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'vault_id', 'digest_date',
+                         name='uq_digest_delivery'),
+    )
 
 
 # --- API ROUTES FOR V0 ---
@@ -522,7 +1333,7 @@ def get_shared_memories():
 @token_required
 def heartbeat():
     """Updates last_login to prevent Dead Man's Switch trigger"""
-    if hasattr(g, 'user_id'):
+    if 'user_id' in session:
         user = User.query.get(g.user_id)
         user.last_login = datetime.utcnow()
         db.session.commit()
@@ -735,7 +1546,6 @@ def get_current_user():
 
 
 @app.route('/api/check-email', methods=['POST'])
-@token_required
 def check_email():
     data = request.get_json()
     email = data.get('email')
@@ -792,50 +1602,6 @@ def get_single_memory(memory_id):
         "status": "released" if memory.is_released else "locked",
         "is_draft": memory.is_draft
     }), 200
-
-
-@app.route('/api/vaults/<int:memory_id>', methods=['DELETE'])
-@token_required
-def delete_vault(memory_id):
-    if not hasattr(g, 'user_id'):
-        return jsonify({'error': 'Unauthorized'}), 401
-
-    memory = Memory.query.get_or_404(memory_id)
-    current_user = User.query.get(g.user_id)
-
-    is_owner = memory.user_id == g.user_id
-    is_recipient = current_user and memory.recipient_email == current_user.email
-
-    if not is_owner and not is_recipient:
-        return jsonify({'error': 'Forbidden'}), 403
-
-    try:
-        if is_recipient:
-            memory.hidden_from_recipient = True
-            create_notification(g.user_id, 'vault_deleted',
-                f"You removed \"{memory.title}\" from your inbox.")
-            db.session.commit()
-            return jsonify({"message": "Removed from your inbox."}), 200
-        else:
-            was_sent = bool(memory.recipient_email) and not memory.is_draft
-            if was_sent:
-                memory.hidden_from_sender = True
-                if not memory.is_released:  # not yet released — hide from recipient too
-                    memory.hidden_from_recipient = True
-                create_notification(g.user_id, 'vault_deleted',
-                    f"You removed \"{memory.title}\" from your vault.")
-                db.session.commit()
-                return jsonify({"message": "Vault removed from your view."}), 200
-            else:
-                title = memory.title
-                db.session.delete(memory)
-                create_notification(g.user_id, 'vault_deleted',
-                    f"You permanently deleted \"{title}\".")
-                db.session.commit()
-                return jsonify({"message": "Vault deleted."}), 200                           
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/me', methods=['PUT'])
@@ -960,7 +1726,7 @@ def delete_account():
         return jsonify({'error': 'Incorrect password'}), 400
     # Delete user's data
     Memory.query.filter_by(user_id=user.id).delete()
-    FamilyMember.query.filter_by(user_id=user.id).delete()
+    FamilyMember.query.filter_by(family_id=user.family_id).delete()
     Notification.query.filter_by(user_id=user.id).delete()
     db.session.delete(user)
     db.session.commit()
