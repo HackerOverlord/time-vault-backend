@@ -36,7 +36,10 @@ app.config.update(
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_HTTPONLY=True,
 )
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
+_secret_key = os.environ.get('SECRET_KEY')
+if not _secret_key:
+    raise ValueError("SECRET_KEY environment variable is not set")
+app.config['SECRET_KEY'] = _secret_key
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///time_capsule.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = 'protected_media'
@@ -461,6 +464,11 @@ _ALLOWED_MEDIA_TYPES = {'video', 'image', 'text'}
 # Rejected explicitly so Milestone 4 wiring mistakes surface immediately.
 _REJECTED_POST_FIELDS = {'group_id', 'recipient_ids'}
 
+# Maximum allowed base64 media_url size (bytes).  The base64 string for a
+# 5 MB file is ~6.7 MB; this constant enforces that ceiling on the server.
+# The frontend enforces the same 5 MB limit before encoding.
+_MAX_MEDIA_URL_BYTES = 7 * 1024 * 1024  # 7 MB base64 ceiling for a 5 MB file
+
 
 @app.route('/api/posts', methods=['GET'])
 @token_required
@@ -552,6 +560,10 @@ def create_post(vault_id):
 
     caption   = data.get('caption')
     media_url = data.get('media_url')
+
+    # Media size guard: reject oversized base64 payloads before any other work.
+    if media_url is not None and len(str(media_url)) > _MAX_MEDIA_URL_BYTES:
+        return jsonify({'error': 'File too large. Maximum upload size is 5 MB.'}), 413
 
     # Caption validation.
     if media_type == 'text':
@@ -1400,9 +1412,6 @@ def join_family():
     code = (data.get('invite_code') or '').strip().upper()
 
 
-    print(f"[JOIN] user_id={g.user_id} code={code}")
-
-
     invite = InviteCode.query.filter_by(code=code, used=False).first()
     if not invite:
         return jsonify({'message': 'Invalid or expired invite code.'}), 400
@@ -1410,8 +1419,6 @@ def join_family():
         return jsonify({'message': 'This invite code has expired.'}), 400
 
     user = User.query.get(g.user_id)
-
-    print(f"[JOIN] invite.created_by={invite.created_by} joining user.id={user.id} same={invite.created_by == user.id}")
 
     if invite.created_by == user.id:
         return jsonify({'message': "You can't join your own family via invite."}), 400
@@ -1537,11 +1544,12 @@ def get_current_user():
         return jsonify({'error': 'User not found'}), 404
         
     return jsonify({
-    "name": user.name,
+    "id":        str(user.id),
+    "name":      user.name,
     "firstName": user.first_name or user.name.split()[0],
-    "lastName": user.last_name or (user.name.split()[1] if len(user.name.split()) > 1 else ''),
-    "email": user.email,
-    "avatar": user.avatar or None
+    "lastName":  user.last_name or (user.name.split()[1] if len(user.name.split()) > 1 else ''),
+    "email":     user.email,
+    "avatar":    user.avatar or None
 }), 200
 
 
@@ -1720,18 +1728,149 @@ def change_password():
 def delete_account():
     if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
-    data = request.get_json()
+    data = request.get_json() or {}
     user = User.query.get(g.user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
     if not check_password_hash(user.password_hash, data.get('password', '')):
         return jsonify({'error': 'Incorrect password'}), 400
-    # Delete user's data
-    Memory.query.filter_by(user_id=user.id).delete()
-    FamilyMember.query.filter_by(family_id=user.family_id).delete()
-    Notification.query.filter_by(user_id=user.id).delete()
-    db.session.delete(user)
-    db.session.commit()
-    session.clear()
-    return jsonify({'message': 'Account deleted'}), 200
+
+    # Revision 1 (product decision): block deletion if the user owns any vault
+    # that has other members. Deleting their account must not silently destroy
+    # other members' shared content. The user should remove all members from
+    # their vaults first (via the vault management screen) before deleting.
+    # Vaults where the user is the sole member are deleted cleanly below.
+    owned_vaults = Vault.query.filter_by(created_by=user.id).all()
+    for vault in owned_vaults:
+        other_members = VaultMember.query.filter(
+            VaultMember.vault_id == vault.id,
+            VaultMember.user_id != user.id,
+        ).count()
+        if other_members > 0:
+            return jsonify({
+                'error': (
+                    f'You own "{vault.name}" which has other members. '
+                    'Remove all members from your vaults before deleting your account.'
+                )
+            }), 400
+
+    try:
+        # ── Collect all post_ids that will be deleted (owned vaults + user's own posts) ──
+        # Used to distinguish surviving posts whose counters need updating.
+        owned_vault_ids = [v.id for v in owned_vaults]
+        # Collect post_ids that will be deleted so counter updates skip them.
+        owned_vault_post_ids = (
+            [p.id for p in Post.query.filter(Post.vault_id.in_(owned_vault_ids)).all()]
+            if owned_vault_ids else []
+        )
+        user_post_ids = [
+            p.id for p in Post.query.filter_by(author_id=user.id).all()
+        ]
+        all_deleted_post_ids = set(owned_vault_post_ids) | set(user_post_ids)
+
+        # ── Phase 1: delete solo-owned vaults and their content ──────────────────
+        # (At this point every owned vault has no other members — checked above.)
+        for vault in owned_vaults:
+            vault_post_ids = [
+                p.id for p in Post.query.filter_by(vault_id=vault.id).all()
+            ]
+            if vault_post_ids:
+                PostLike.query.filter(
+                    PostLike.post_id.in_(vault_post_ids)
+                ).delete(synchronize_session=False)
+                PostComment.query.filter(
+                    PostComment.post_id.in_(vault_post_ids)
+                ).delete(synchronize_session=False)
+            Post.query.filter_by(vault_id=vault.id).delete(synchronize_session=False)
+            VaultMember.query.filter_by(vault_id=vault.id).delete(synchronize_session=False)
+            DigestDelivery.query.filter_by(vault_id=vault.id).delete(synchronize_session=False)
+            db.session.delete(vault)
+
+        # ── Phase 2: user's participation in other vaults ────────────────────────
+
+        # 2a. Delete likes the user placed on other users' posts that SURVIVE.
+        # Revision 2: update like_count on surviving posts before bulk delete.
+        # Posts that will survive and lose a like from this user.
+        # Counters on deleted posts (in all_deleted_post_ids) don't matter.
+        surviving_liked_posts = (
+            Post.query
+            .join(PostLike, PostLike.post_id == Post.id)
+            .filter(
+                PostLike.user_id == user.id,
+                Post.id.notin_(all_deleted_post_ids),
+            )
+            .all()
+        ) if all_deleted_post_ids else (
+            Post.query
+            .join(PostLike, PostLike.post_id == Post.id)
+            .filter(PostLike.user_id == user.id)
+            .all()
+        )
+        for p in surviving_liked_posts:
+            p.like_count = max(0, p.like_count - 1)
+
+        PostLike.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+
+        # 2b. Delete comments the user made on other users' posts that SURVIVE.
+        # Revision 2: update comment_count on surviving posts before bulk delete.
+        # Posts that will survive and lose comments from this user.
+        surviving_commented_posts = (
+            Post.query
+            .join(PostComment, PostComment.post_id == Post.id)
+            .filter(
+                PostComment.author_id == user.id,
+                Post.id.notin_(all_deleted_post_ids),
+            )
+            .distinct()
+            .all()
+        ) if all_deleted_post_ids else (
+            Post.query
+            .join(PostComment, PostComment.post_id == Post.id)
+            .filter(PostComment.author_id == user.id)
+            .distinct()
+            .all()
+        )
+        for p in surviving_commented_posts:
+            # Each surviving post may have multiple comments from this user;
+            # count them to decrement correctly.
+            user_comment_count = PostComment.query.filter_by(
+                post_id=p.id, author_id=user.id
+            ).count()
+            p.comment_count = max(0, p.comment_count - user_comment_count)
+
+        PostComment.query.filter_by(author_id=user.id).delete(synchronize_session=False)
+
+        # 2c. Delete user's own posts (in other vaults) and their likes/comments.
+        if user_post_ids:
+            PostLike.query.filter(
+                PostLike.post_id.in_(user_post_ids)
+            ).delete(synchronize_session=False)
+            PostComment.query.filter(
+                PostComment.post_id.in_(user_post_ids)
+            ).delete(synchronize_session=False)
+        Post.query.filter_by(author_id=user.id).delete(synchronize_session=False)
+
+        # 2d. Remove remaining vault memberships, digest records, and notifications.
+        VaultMember.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        DigestDelivery.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        Notification.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+
+        # ── Phase 3: legacy cleanup ───────────────────────────────────────────────
+        Memory.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        InviteCode.query.filter_by(created_by=user.id).delete(synchronize_session=False)
+        if user.family_id is not None:
+            FamilyMember.query.filter_by(
+                family_id=user.family_id
+            ).delete(synchronize_session=False)
+
+        # ── Phase 4: delete the user record ──────────────────────────────────────
+        db.session.delete(user)
+        db.session.commit()
+        return jsonify({'message': 'Account deleted'}), 200
+
+    except Exception:
+        db.session.rollback()
+        return jsonify({'error': 'Account deletion failed. Please try again.'}), 500
 
 with app.app_context():
     db.create_all()
