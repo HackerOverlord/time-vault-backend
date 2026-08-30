@@ -118,7 +118,10 @@ def run_unlock_job():
             message = f'A memory from {rel} just unlocked in {vault.name}'
 
             for m in members:
-                create_notification(m.user_id, 'capsule_unlocked', message)
+                create_notification(
+                    m.user_id, 'capsule_unlocked', message,
+                    vault_id=vault_id,
+                )
 
             db.session.commit()
             log.info(f'Unlocked post {post_id} in vault {vault_id} '
