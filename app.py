@@ -1304,7 +1304,7 @@ def resolve_invite(token):
     already_member = VaultMember.query.filter_by(
         vault_id=vault.id, user_id=g.user_id
     ).first() is not None
-    return jsonify({
+    response = {
         'valid':          True,
         'vault_id':       str(vault.id),
         'vault_name':     vault.name,
@@ -1312,7 +1312,14 @@ def resolve_invite(token):
         'accent_color':   vault.accent_color,
         'inviter_name':   creator.name if creator else 'Someone',
         'already_member': already_member,
-    }), 200
+    }
+    # If already a member, include the serialized vault so the frontend
+    # can navigate directly to it without a second API round-trip.
+    if already_member:
+        vm = VaultMember.query.filter_by(vault_id=vault.id, user_id=g.user_id).first()
+        member_count = VaultMember.query.filter_by(vault_id=vault.id).count()
+        response['vault'] = serialize_vault(vault, vm, member_count)
+    return jsonify(response), 200
 
 
 @app.route('/api/invites/<string:token>/join', methods=['POST'])
