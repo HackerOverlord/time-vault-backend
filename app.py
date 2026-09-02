@@ -180,6 +180,15 @@ def require_vault_owner(vault_id):
     return result
 
 
+def generate_invite_token() -> str:
+    """Generate a cryptographically secure URL-safe invite token.
+
+    Uses secrets.token_urlsafe(32) which produces 43 URL-safe characters
+    with ~256 bits of entropy — infeasible to enumerate.
+    """
+    return secrets.token_urlsafe(32)
+
+
 def generate_invite_code():
     """Generate a unique 6-character uppercase alphanumeric invite code."""
     chars = string.ascii_uppercase + string.digits
@@ -587,7 +596,15 @@ def serialize_vault(vault, vm, member_count, unread=0):
         'claimed_by':          _claimed_by_summary(vault.claimed_by_user_id),
     }
     if vm.role == 'owner':
-        entry['invite_code'] = vault.invite_code
+        entry['invite_code']  = vault.invite_code
+        # Lazy-generate invite_token if vault pre-dates this feature
+        if not vault.invite_token:
+            vault.invite_token = generate_invite_token()
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()  # concurrent write — next call will retry
+        entry['invite_token'] = vault.invite_token
     return entry
 
 
@@ -1265,9 +1282,83 @@ def regenerate_invite_code(vault_id):
     result = require_vault_owner(vault_id)
     if isinstance(result, tuple):
         return result
-    vault.invite_code = generate_invite_code()
+    vault.invite_code  = generate_invite_code()
+    vault.invite_token = generate_invite_token()
     db.session.commit()
-    return jsonify({'invite_code': vault.invite_code}), 200
+    return jsonify({
+        'invite_code':  vault.invite_code,
+        'invite_token': vault.invite_token,
+    }), 200
+
+
+# ── Pass 31: Shareable invite links ─────────────────────────────────────────
+
+@app.route('/api/invites/<string:token>', methods=['GET'])
+@token_required
+def resolve_invite(token):
+    """Return public-safe vault info for an invite token (no side effects)."""
+    vault = Vault.query.filter_by(invite_token=token).first()
+    if not vault:
+        return jsonify({'error': 'Invite not found or expired'}), 404
+    creator = User.query.get(vault.created_by)
+    already_member = VaultMember.query.filter_by(
+        vault_id=vault.id, user_id=g.user_id
+    ).first() is not None
+    return jsonify({
+        'valid':          True,
+        'vault_id':       str(vault.id),
+        'vault_name':     vault.name,
+        'vault_cover':    vault.cover_url,
+        'accent_color':   vault.accent_color,
+        'inviter_name':   creator.name if creator else 'Someone',
+        'already_member': already_member,
+    }), 200
+
+
+@app.route('/api/invites/<string:token>/join', methods=['POST'])
+@token_required
+def join_via_token(token):
+    """Join a vault via shareable invite link. Idempotent — 200 if already member."""
+    vault = Vault.query.filter_by(invite_token=token).first()
+    if not vault:
+        return jsonify({'error': 'Invite not found or expired'}), 404
+    existing = VaultMember.query.filter_by(
+        vault_id=vault.id, user_id=g.user_id
+    ).first()
+    if existing:
+        member_count = VaultMember.query.filter_by(vault_id=vault.id).count()
+        return jsonify({
+            'vault':          serialize_vault(vault, existing, member_count),
+            'message':        f'You are already a member of {vault.name}',
+            'already_member': True,
+        }), 200
+    now = datetime.utcnow()
+    member = VaultMember(
+        vault_id=vault.id, user_id=g.user_id,
+        role='member', joined_at=now, invited_by=None, last_seen_at=now,
+    )
+    joiner = User.query.get(g.user_id)
+    existing_members = VaultMember.query.filter_by(vault_id=vault.id).all()
+    db.session.add(member)
+    for em in existing_members:
+        create_notification(
+            em.user_id, 'member_joined',
+            f'{joiner.name} joined {vault.name}.',
+            vault_id=vault.id,
+        )
+    create_notification(
+        g.user_id, 'member_joined',
+        f'You joined {vault.name}.',
+        vault_id=vault.id,
+    )
+    db.session.commit()
+    member_count = VaultMember.query.filter_by(vault_id=vault.id).count()
+    new_vm = VaultMember.query.filter_by(vault_id=vault.id, user_id=g.user_id).first()
+    return jsonify({
+        'vault':          serialize_vault(vault, new_vm, member_count),
+        'message':        f'You joined {vault.name}',
+        'already_member': False,
+    }), 201
 
 
 # --- V1 ROUTES: POSTS (3C) ---
@@ -1916,6 +2007,8 @@ class Vault(db.Model):
     id           = db.Column(db.Integer, primary_key=True)
     name         = db.Column(db.String(50), nullable=False)
     invite_code  = db.Column(db.String(6), unique=True, nullable=False)
+    # Shareable link token — secrets.token_urlsafe(32), 43 URL-safe chars
+    invite_token = db.Column(db.String(64), unique=True, nullable=True)
     created_by   = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     created_at   = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     # Pass 18: vault identity fields
@@ -2973,6 +3066,7 @@ def _run_migrations(conn):
 
     _NEW_VAULT_COLUMNS = [
         # (column_name, DDL type)
+        ("invite_token",          "VARCHAR(64)"),
         ("description",          "VARCHAR(160)"),
         ("accent_color",         "VARCHAR(20)"),
         ("cover_url",            "VARCHAR(500)"),
