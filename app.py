@@ -711,15 +711,31 @@ def delete_vault_v1(vault_id):
     vault_posts = Post.query.filter_by(vault_id=vault_id).all()
     post_ids = [p.id for p in vault_posts]
     media_urls = [p.media_url for p in vault_posts if p.media_url]  # collect before delete
+    if vault.cover_url:                       # cover art is R2-hosted too
+        media_urls.append(vault.cover_url)
     if post_ids:
         PostLike.query.filter(PostLike.post_id.in_(post_ids)).delete(synchronize_session=False)
         PostComment.query.filter(PostComment.post_id.in_(post_ids)).delete(synchronize_session=False)
     Post.query.filter_by(vault_id=vault_id).delete(synchronize_session=False)
     VaultMember.query.filter_by(vault_id=vault_id).delete(synchronize_session=False)
+    # Child-claim tokens hold a non-nullable FK to this vault.
+    ChildClaimToken.query.filter_by(vault_id=vault_id).delete(synchronize_session=False)
     db.session.delete(vault)
     db.session.commit()
-    for url in media_urls:  # fire-and-forget R2 cleanup after commit
-        delete_object(url)
+
+    # Best-effort storage cleanup — the vault is already gone, so a storage
+    # failure must not surface as a failed delete. Isolated per object.
+    failed = 0
+    for url in media_urls:
+        try:
+            delete_object(url)
+        except Exception:
+            failed += 1  # URL not logged — may contain a token
+    if failed:
+        app.logger.warning(
+            "Vault deletion: %d/%d storage objects could not be removed",
+            failed, len(media_urls),
+        )
     return '', 204
 
 
@@ -2929,6 +2945,14 @@ def delete_account():
             vault_posts = Post.query.filter_by(vault_id=vault.id).all()
             vault_post_ids = [p.id for p in vault_posts]
             r2_urls_to_delete += [p.media_url for p in vault_posts if p.media_url]
+            # Vault cover art is R2-hosted too — collect before the row is gone.
+            if vault.cover_url:
+                r2_urls_to_delete.append(vault.cover_url)
+            # Child-claim tokens reference vault_id (non-nullable) — must go
+            # before the vault row or they become orphaned.
+            ChildClaimToken.query.filter_by(
+                vault_id=vault.id
+            ).delete(synchronize_session=False)
             if vault_post_ids:
                 PostLike.query.filter(
                     PostLike.post_id.in_(vault_post_ids)
@@ -3013,6 +3037,12 @@ def delete_account():
         Notification.query.filter_by(user_id=user.id).delete(synchronize_session=False)
 
         # ── Phase 3: legacy cleanup ───────────────────────────────────────────────
+        # Tokens this user created for vaults they do NOT own (created_by is a
+        # non-nullable FK to user, so these would orphan on user deletion).
+        ChildClaimToken.query.filter_by(
+            created_by=user.id
+        ).delete(synchronize_session=False)
+
         Memory.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         InviteCode.query.filter_by(created_by=user.id).delete(synchronize_session=False)
         if user.family_id is not None:
@@ -3025,8 +3055,23 @@ def delete_account():
             r2_urls_to_delete.append(user.avatar)
         db.session.delete(user)
         db.session.commit()
-        for url in r2_urls_to_delete:  # fire-and-forget R2 cleanup after commit
-            delete_object(url)
+
+        # ── Best-effort storage cleanup ──────────────────────────────────────
+        # The DB commit above is the point of no return: the account IS gone.
+        # A storage failure must never surface as a failed deletion, or the
+        # client keeps its session token for an account that no longer exists.
+        # Each object is isolated so one failure cannot skip the rest.
+        failed = 0
+        for url in r2_urls_to_delete:
+            try:
+                delete_object(url)
+            except Exception:
+                failed += 1  # URL itself is not logged — may contain a token
+        if failed:
+            app.logger.warning(
+                "Account deletion: %d/%d storage objects could not be removed",
+                failed, len(r2_urls_to_delete),
+            )
         return jsonify({'message': 'Account deleted'}), 200
 
     except Exception:
