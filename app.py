@@ -626,7 +626,7 @@ def send_claim_invite_email(
     returned in API JSON responses (except when EXPOSE_CLAIM_TOKEN=true,
     which is for development and test environments only).
     """
-    base_url   = os.environ.get('APP_BASE_URL', 'https://time-vault.vercel.app')
+    base_url   = os.environ.get('APP_BASE_URL', 'https://time-vault-imhg.vercel.app').rstrip('/')
     claim_url  = f'{base_url}/?screen=claim&token={raw_token}'
     expiry_str = expires_at.strftime('%B %d, %Y') if hasattr(expires_at, 'strftime') else str(expires_at)
 
@@ -639,10 +639,11 @@ def send_claim_invite_email(
         f'This invitation expires on {expiry_str}.\n\n'
         f'— Time Vault'
     )
+    import html
     body_html = (
         f'<p>Hi!</p>'
-        f'<p><strong>{creator_name}</strong> has created a Time Vault called '
-        f'<strong>\"{vault_name}\"</strong> for you.</p>'
+        f'<p><strong>{html.escape(creator_name)}</strong> has created a Time Vault called '
+        f'<strong>\"{html.escape(vault_name)}\"</strong> for you.</p>'
         f'<p><a href="{claim_url}">Click here to claim your vault</a></p>'
         f'<p>Invitation expires: {expiry_str}</p>'
     )
@@ -2166,6 +2167,17 @@ class ChildClaimToken(db.Model):
     used       = db.Column(db.Boolean, nullable=False, default=False)
 
 
+class PasswordResetToken(db.Model):
+    """Single-use hashed token for resetting a forgotten password."""
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    # SHA-256 hex digest of the plaintext token — plaintext never stored
+    token_hash = db.Column(db.String(64), unique=True, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used       = db.Column(db.Boolean, nullable=False, default=False)
+
+
 class Post(db.Model):
     id            = db.Column(db.Integer, primary_key=True)
     vault_id      = db.Column(db.Integer, db.ForeignKey('vault.id'), nullable=False)
@@ -2961,6 +2973,109 @@ def family_status():
     member_count = User.query.filter_by(family_id=user.family_id).count()
     return jsonify({'in_shared_family': member_count > 1}), 200
 
+# ── Forgot / reset password ──────────────────────────────────────────────────
+# Flow: POST /api/forgot-password {email} → always the same 200 response (no
+# account enumeration). If the account exists, a 30-minute single-use link is
+# emailed. POST /api/reset-password {token, new_password} sets the password,
+# which also revokes every existing login token (password fingerprint).
+RESET_TOKEN_LIFETIME = timedelta(minutes=30)
+RESET_MAX_REQUESTS   = 3                  # per (IP, email) ...
+RESET_WINDOW         = timedelta(hours=1)  # ... per hour
+_reset_requests = {}
+_FORGOT_RESPONSE = {'message': 'If an account exists for that email, a reset link has been sent.'}
+
+def _hash_reset_token(raw):
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+def send_password_reset_email(to_email, name, raw_token):
+    import html
+    base_url  = os.environ.get('APP_BASE_URL', 'https://time-vault-imhg.vercel.app').rstrip('/')
+    reset_url = f'{base_url}/?screen=reset&token={raw_token}'
+    minutes   = int(RESET_TOKEN_LIFETIME.total_seconds() // 60)
+    subject   = 'Reset your Time Vault password'
+    body_text = (
+        f'Hi {name},\n\n'
+        f'Someone asked to reset the password for your Time Vault account.\n'
+        f'Use this link within {minutes} minutes:\n{reset_url}\n\n'
+        f"If this wasn't you, ignore this email. Your password won't change.\n\n"
+        f'— Time Vault'
+    )
+    body_html = (
+        f'<p>Hi {html.escape(name)},</p>'
+        f'<p>Someone asked to reset the password for your Time Vault account.</p>'
+        f'<p><a href="{html.escape(reset_url)}">Reset your password</a> '
+        f'(link expires in {minutes} minutes).</p>'
+        f"<p>If this wasn't you, ignore this email. Your password won't change.</p>"
+    )
+    _send_email(to_email, subject, body_text, body_html)
+
+@app.route('/api/forgot-password', methods=['POST'])
+def forgot_password():
+    data  = request.get_json(silent=True) or {}
+    email = str(data.get('email') or '').strip().lower()
+    if not email:
+        return jsonify({'error': 'Email is required'}), 400
+
+    # Rate limit silently: over the limit still gets the generic response.
+    key = (_client_ip(), email)
+    now = datetime.utcnow()
+    recent = [t for t in _reset_requests.get(key, []) if now - t < RESET_WINDOW]
+    if len(recent) >= RESET_MAX_REQUESTS:
+        _reset_requests[key] = recent
+        return jsonify(_FORGOT_RESPONSE), 200
+    _reset_requests[key] = recent + [now]
+
+    user = User.query.filter_by(email=email).first()
+    if user:
+        # Only the newest link works.
+        PasswordResetToken.query.filter_by(user_id=user.id, used=False)\
+            .update({'used': True}, synchronize_session=False)
+        raw = secrets.token_urlsafe(32)
+        db.session.add(PasswordResetToken(
+            user_id=user.id, token_hash=_hash_reset_token(raw),
+            created_at=now, expires_at=now + RESET_TOKEN_LIFETIME,
+        ))
+        db.session.commit()
+        try:
+            send_password_reset_email(user.email, user.name or 'there', raw)
+        except Exception as exc:
+            app.logger.error(f'Password reset email failed: {exc}')
+    return jsonify(_FORGOT_RESPONSE), 200
+
+@app.route('/api/reset-password', methods=['POST'])
+def reset_password():
+    data    = request.get_json(silent=True) or {}
+    raw     = str(data.get('token') or '')
+    new_pwd = data.get('new_password')
+    if not raw or not isinstance(new_pwd, str):
+        return jsonify({'error': 'Token and new password are required'}), 400
+    if len(new_pwd) < 8:
+        return jsonify({'error': 'New password must be at least 8 characters'}), 400
+    if len(new_pwd) > 128:
+        return jsonify({'error': 'Password is too long'}), 400
+
+    row = PasswordResetToken.query.filter_by(token_hash=_hash_reset_token(raw)).first()
+    if not row or row.used or row.expires_at < datetime.utcnow():
+        return jsonify({'error': 'This reset link is invalid or has expired. Request a new one.'}), 400
+    user = User.query.get(row.user_id)
+    if not user:
+        return jsonify({'error': 'This reset link is invalid or has expired. Request a new one.'}), 400
+
+    # Claim the token atomically so a link can't be used twice concurrently.
+    claimed = PasswordResetToken.query.filter_by(id=row.id, used=False)\
+        .update({'used': True}, synchronize_session=False)
+    if not claimed:
+        db.session.rollback()
+        return jsonify({'error': 'This reset link is invalid or has expired. Request a new one.'}), 400
+    user.password_hash = generate_password_hash(new_pwd)
+    db.session.commit()
+
+    # Clear any login lockout for this account so the user can sign in now.
+    for k in [k for k in _login_failures if k[1] == user.email]:
+        _login_failures.pop(k, None)
+    return jsonify({'message': 'Password updated. You can now sign in.'}), 200
+
+
 @app.route('/api/change-password', methods=['POST'])
 @token_required
 def change_password():
@@ -3126,6 +3241,7 @@ def delete_account():
         VaultMember.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         DigestDelivery.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         Notification.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        PasswordResetToken.query.filter_by(user_id=user.id).delete(synchronize_session=False)
 
         # ── Phase 3: legacy cleanup ───────────────────────────────────────────────
         # Tokens this user created for vaults they do NOT own (created_by is a
