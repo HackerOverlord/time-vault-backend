@@ -63,6 +63,17 @@ def run_due_jobs():
     except Exception as exc:  # never let a job failure break a user request
         db.session.rollback()
         app.logger.error(f'Background job failed: {exc}')
+    # Daily database backup (see backup.py). Separate try: a backup problem
+    # must not stop capsules unlocking, and vice versa.
+    try:
+        db_path = db.engine.url.database
+        if db.engine.url.get_backend_name() == 'sqlite' and db_path and os.path.isfile(db_path):
+            import backup
+            made = backup.backup_if_due(db_path, now=now)
+            if made:
+                app.logger.info(f'Database backup written: {made.name}')
+    except Exception as exc:
+        app.logger.error(f'Database backup failed: {exc}')
 
 @app.before_request
 def _jobs_hook():
