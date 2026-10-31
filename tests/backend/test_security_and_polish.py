@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import pytest
 
 import app as A
+import routes.posts as posts_routes
 
 
 @pytest.fixture(autouse=True)
@@ -73,7 +74,7 @@ def test_local_tomorrow_accepted_when_utc_is_already_tomorrow(client, vault, aut
             @classmethod
             def utcnow(cls):
                 return fake_now
-        mp.setattr(A, "datetime", FakeDT)
+        mp.setattr(posts_routes, "datetime", FakeDT)
         # Local date is Oct 30, so Oct 31 is "tomorrow" for this user.
         r = _post_capsule(client, vault, auth_owner, "2026-10-31", tz=240)
         assert r.status_code == 201, r.get_json()
