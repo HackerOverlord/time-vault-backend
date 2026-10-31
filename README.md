@@ -31,6 +31,26 @@ Frontend: [HackerOverlord/time-vault](https://github.com/HackerOverlord/time-vau
 Python 3.12 · Flask · Flask-SQLAlchemy (SQLite) · PyJWT · cryptography · boto3 (Cloudflare R2) · pytest
 Hosted on PythonAnywhere.
 
+## Project structure
+
+```
+app.py              App setup: config, CORS, security headers, job hook, startup migrations
+routes/
+  auth.py           Login, register, profile, password change/reset, account deletion
+  vaults.py         Vaults, covers, members, invites, child-vault claims
+  posts.py          Feed, posts and time capsules, archive, likes, comments
+  notifications.py  Notification list and read state
+security.py         JWT issue/verify, @token_required, login lockout
+crypto.py           Fernet encryption at rest
+helpers.py          Permission checks, serializers, upload validation, notifications
+emailer.py          SMTP email
+models.py           SQLAlchemy models
+r2.py               Cloudflare R2 storage
+unlock_job.py       Capsule unlocking and the daily digest
+scripts/seed_demo.py  Demo data
+tests/backend/      pytest suite
+```
+
 ## Running locally
 
 ```bash

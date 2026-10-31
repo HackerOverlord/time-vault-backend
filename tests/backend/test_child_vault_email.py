@@ -31,7 +31,7 @@ def _child_vault(client, auth_owner, email="kid@example.com", name="Kid's Vault"
 
 class TestClaimInviteEmail:
 
-    @patch("app.send_claim_invite_email")
+    @patch("routes.vaults.send_claim_invite_email")
     def test_send_claim_invite_calls_email_with_correct_recipient(
         self, mock_send, client, auth_owner
     ):
@@ -45,7 +45,7 @@ class TestClaimInviteEmail:
         assert call_kwargs[1]["to_email"] == "alice@example.com" or \
                call_kwargs[0][0] == "alice@example.com"
 
-    @patch("app.send_claim_invite_email")
+    @patch("routes.vaults.send_claim_invite_email")
     def test_send_claim_invite_includes_vault_name(self, mock_send, client, auth_owner):
         vid = _child_vault(client, auth_owner, name="Alex's Memories")
         with patch.dict(os.environ, EXPOSE_ENV):
@@ -54,7 +54,7 @@ class TestClaimInviteEmail:
         vault_name_passed = args[1].get("vault_name") or args[0][2]
         assert "Alex's Memories" in vault_name_passed
 
-    @patch("app.send_claim_invite_email")
+    @patch("routes.vaults.send_claim_invite_email")
     def test_send_claim_invite_includes_expiry(self, mock_send, client, auth_owner):
         vid = _child_vault(client, auth_owner)
         with patch.dict(os.environ, EXPOSE_ENV):
@@ -62,7 +62,7 @@ class TestClaimInviteEmail:
         data = r.get_json()
         assert "expires_at" in data
 
-    @patch("app.send_claim_invite_email")
+    @patch("routes.vaults.send_claim_invite_email")
     def test_claim_invite_includes_claim_url_via_exposed_token(
         self, mock_send, client, auth_owner
     ):
@@ -78,13 +78,13 @@ class TestClaimInviteEmail:
         """Without EXPOSE_CLAIM_TOKEN the raw token must NOT be in the response."""
         vid = _child_vault(client, auth_owner)
         env = {k: v for k, v in os.environ.items() if k != "EXPOSE_CLAIM_TOKEN"}
-        with patch("app.send_claim_invite_email"), \
+        with patch("routes.vaults.send_claim_invite_email"), \
              patch.dict(os.environ, env, clear=True):
             r = client.post(f"/api/vaults/{vid}/claim-invite", headers=auth_owner)
         data = r.get_json()
         assert "token" not in data, "Raw token must not appear in production response"
 
-    @patch("app.send_claim_invite_email")
+    @patch("routes.vaults.send_claim_invite_email")
     def test_new_invite_invalidates_previous_token(
         self, mock_send, app_ctx, client, auth_owner
     ):
@@ -109,7 +109,7 @@ class TestClaimInviteEmail:
         r2 = client.post(f"/api/vaults/{vid}/claim-invite", headers=auth_owner)
         assert r2.status_code == 400
 
-    @patch("app.send_claim_invite_email", side_effect=Exception("SMTP down"))
+    @patch("routes.vaults.send_claim_invite_email", side_effect=Exception("SMTP down"))
     def test_email_failure_still_returns_response(self, mock_send, client, auth_owner):
         """Email failure must not leave the token in an ambiguous state."""
         vid = _child_vault(client, auth_owner)
@@ -127,7 +127,7 @@ class TestClaimedBySerialization:
 
     def _create_and_claim(self, client, auth_owner):
         vid = _child_vault(client, auth_owner, email="claim_ser@example.com")
-        with patch("app.send_claim_invite_email"), \
+        with patch("routes.vaults.send_claim_invite_email"), \
              patch.dict(os.environ, EXPOSE_ENV):
             ri = client.post(f"/api/vaults/{vid}/claim-invite", headers=auth_owner)
             token = ri.get_json()["token"]
@@ -182,7 +182,7 @@ class TestClaimSecurity:
 
     def _make_token(self, client, auth_owner, email="sec@example.com"):
         vid = _child_vault(client, auth_owner, email=email)
-        with patch("app.send_claim_invite_email"), \
+        with patch("routes.vaults.send_claim_invite_email"), \
              patch.dict(os.environ, EXPOSE_ENV):
             ri = client.post(f"/api/vaults/{vid}/claim-invite", headers=auth_owner)
             return vid, ri.get_json()["token"]

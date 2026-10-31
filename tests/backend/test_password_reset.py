@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import pytest
 
 import app as A
+import routes.auth as auth_routes
 
 
 @pytest.fixture(autouse=True)
@@ -19,7 +20,7 @@ def _reset_state():
 def sent(monkeypatch):
     """Capture reset emails instead of sending them."""
     outbox = []
-    monkeypatch.setattr(A, "send_password_reset_email",
+    monkeypatch.setattr(auth_routes, "send_password_reset_email",
                         lambda to, name, raw: outbox.append({"to": to, "token": raw}))
     return outbox
 
@@ -120,7 +121,7 @@ def test_reset_clears_login_lockout(client, sent):
 def test_email_failure_still_returns_generic_response(client, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("smtp down")
-    monkeypatch.setattr(A, "send_password_reset_email", boom)
+    monkeypatch.setattr(auth_routes, "send_password_reset_email", boom)
     _register(client)
     r = client.post("/api/forgot-password", json={"email": "reset@example.com"})
     assert r.status_code == 200

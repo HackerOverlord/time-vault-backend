@@ -136,7 +136,7 @@ class TestClaimInvite:
 
     def test_owner_can_create_claim_invite(self, client, auth_owner):
         vid = self._make_child_vault(client, auth_owner)
-        with patch("app.send_claim_invite_email"), patch.dict(os.environ, EXPOSE_ENV):
+        with patch("routes.vaults.send_claim_invite_email"), patch.dict(os.environ, EXPOSE_ENV):
             r = client.post(f"/api/vaults/{vid}/claim-invite", headers=auth_owner)
         assert r.status_code == 201
         data = r.get_json()
@@ -159,7 +159,7 @@ class TestClaimInvite:
 
     def test_new_invite_invalidates_previous(self, client, app_ctx, auth_owner):
         vid = self._make_child_vault(client, auth_owner)
-        with patch("app.send_claim_invite_email"), patch.dict(os.environ, EXPOSE_ENV):
+        with patch("routes.vaults.send_claim_invite_email"), patch.dict(os.environ, EXPOSE_ENV):
             r1 = client.post(f"/api/vaults/{vid}/claim-invite", headers=auth_owner)
             token1 = r1.get_json()["token"]
             client.post(f"/api/vaults/{vid}/claim-invite", headers=auth_owner)
@@ -181,7 +181,7 @@ class TestClaimInfo:
                               "child_email": "info@example.com"},
                         headers=auth_owner)
         vid = r.get_json()["id"]
-        with patch("app.send_claim_invite_email"), patch.dict(os.environ, EXPOSE_ENV):
+        with patch("routes.vaults.send_claim_invite_email"), patch.dict(os.environ, EXPOSE_ENV):
             ri = client.post(f"/api/vaults/{vid}/claim-invite", headers=auth_owner)
         token = ri.get_json()["token"]
         return vid, token
@@ -231,7 +231,7 @@ class TestClaimVault:
                         headers=auth_owner)
         assert r.status_code == 201
         vault_id = r.get_json()["id"]
-        with patch("app.send_claim_invite_email"), patch.dict(os.environ, EXPOSE_ENV):
+        with patch("routes.vaults.send_claim_invite_email"), patch.dict(os.environ, EXPOSE_ENV):
             ri = client.post(f"/api/vaults/{vault_id}/claim-invite", headers=auth_owner)
         assert ri.status_code == 201
         return vault_id, ri.get_json()["token"]

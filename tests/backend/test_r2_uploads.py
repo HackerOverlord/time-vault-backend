@@ -57,7 +57,7 @@ class TestTextPosts:
         assert r.get_json().get("media_url") is None
 
     def test_text_post_does_not_call_r2(self, client, vault, auth_owner):
-        with patch("app.upload_post_media") as mock_r2:
+        with patch("routes.posts.upload_post_media") as mock_r2:
             _post_text(client, vault.id, auth_owner)
             mock_r2.assert_not_called()
 
@@ -69,20 +69,20 @@ class TestTextPosts:
 # ── Multipart image upload ─────────────────────────────────────────────────────
 
 class TestMultipartImageUpload:
-    @patch("app.upload_post_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL)
     def test_jpeg_upload_returns_r2_url(self, mock_r2, client, vault, auth_owner):
         r = _post_multipart(client, vault.id, auth_owner,
                             JPEG_BYTES, "photo.jpg", "image/jpeg", "image")
         assert r.status_code == 201
         assert r.get_json()["media_url"] == FAKE_R2_URL
 
-    @patch("app.upload_post_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL)
     def test_png_upload_succeeds(self, mock_r2, client, vault, auth_owner):
         r = _post_multipart(client, vault.id, auth_owner,
                             PNG_BYTES, "photo.png", "image/png", "image")
         assert r.status_code == 201
 
-    @patch("app.upload_post_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL)
     def test_r2_url_stored_in_db(self, mock_r2, app_ctx, client, vault, auth_owner):
         r = _post_multipart(client, vault.id, auth_owner,
                             JPEG_BYTES, "photo.jpg", "image/jpeg", "image")
@@ -91,7 +91,7 @@ class TestMultipartImageUpload:
             p = A.Post.query.get(int(post_id))
             assert p.media_url == FAKE_R2_URL
 
-    @patch("app.upload_post_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL)
     def test_base64_never_stored_in_db(self, mock_r2, app_ctx, client, vault, auth_owner):
         r = _post_multipart(client, vault.id, auth_owner,
                             JPEG_BYTES, "photo.jpg", "image/jpeg", "image")
@@ -101,7 +101,7 @@ class TestMultipartImageUpload:
             assert p.media_url is not None
             assert not p.media_url.startswith("data:")
 
-    @patch("app.upload_post_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL)
     def test_upload_post_media_called_with_correct_args(self, mock_r2, client, vault, auth_owner):
         _post_multipart(client, vault.id, auth_owner,
                         JPEG_BYTES, "photo.jpg", "image/jpeg", "image")
@@ -126,14 +126,14 @@ class TestMultipartImageUpload:
                             b"", "photo.jpg", "image/jpeg", "image")
         assert r.status_code == 400
 
-    @patch("app.upload_post_media", side_effect=Exception("R2 unavailable"))
+    @patch("routes.posts.upload_post_media", side_effect=Exception("R2 unavailable"))
     def test_r2_failure_returns_503(self, mock_r2, client, vault, auth_owner):
         r = _post_multipart(client, vault.id, auth_owner,
                             JPEG_BYTES, "photo.jpg", "image/jpeg", "image")
         assert r.status_code == 503
         assert "upload" in r.get_json()["error"].lower()
 
-    @patch("app.upload_post_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL)
     def test_r2_failure_leaves_no_orphan_post(self, mock_r2, app_ctx, client, vault, auth_owner):
         """If R2 fails, no Post row is created."""
         mock_r2.side_effect = Exception("R2 down")
@@ -149,14 +149,14 @@ class TestMultipartImageUpload:
 # ── Multipart video upload ─────────────────────────────────────────────────────
 
 class TestMultipartVideoUpload:
-    @patch("app.upload_post_media", return_value="https://pub.example.com/posts/vid.mp4")
+    @patch("routes.posts.upload_post_media", return_value="https://pub.example.com/posts/vid.mp4")
     def test_mp4_upload_returns_r2_url(self, mock_r2, client, vault, auth_owner):
         r = _post_multipart(client, vault.id, auth_owner,
                             MP4_BYTES, "clip.mp4", "video/mp4", "video")
         assert r.status_code == 201
         assert "mp4" in r.get_json()["media_url"]
 
-    @patch("app.upload_post_media", return_value="https://pub.example.com/posts/vid.webm")
+    @patch("routes.posts.upload_post_media", return_value="https://pub.example.com/posts/vid.webm")
     def test_webm_upload_succeeds(self, mock_r2, client, vault, auth_owner):
         r = _post_multipart(client, vault.id, auth_owner,
                             WEBM_BYTES, "clip.webm", "video/webm", "video")
@@ -178,7 +178,7 @@ class TestLegacyBase64Path:
         import base64
         return "data:image/jpeg;base64," + base64.b64encode(JPEG_BYTES).decode()
 
-    @patch("app.upload_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_media", return_value=FAKE_R2_URL)
     def test_legacy_base64_image_upload_succeeds(self, mock_upload, client, vault, auth_owner):
         r = client.post(f"/api/vaults/{vault.id}/posts",
                         json={"caption": "legacy", "media_type": "image",
@@ -186,7 +186,7 @@ class TestLegacyBase64Path:
                         headers=auth_owner)
         assert r.status_code == 201
 
-    @patch("app.upload_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_media", return_value=FAKE_R2_URL)
     def test_legacy_base64_stores_r2_url_not_base64(self, mock_upload, app_ctx, client, vault, auth_owner):
         r = client.post(f"/api/vaults/{vault.id}/posts",
                         json={"caption": "legacy", "media_type": "image",
@@ -214,7 +214,7 @@ class TestLegacyBase64Path:
         assert legacy is not None
         assert legacy["media_url"].startswith("data:")  # still returned as-is
 
-    @patch("app.upload_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_media", return_value=FAKE_R2_URL)
     def test_existing_r2_url_passes_through_unchanged(self, mock_upload, app_ctx, client, users, vault, auth_owner):
         """If media_url is already an R2 URL, upload_media must not be called."""
         r = client.post(f"/api/vaults/{vault.id}/posts",
@@ -228,7 +228,7 @@ class TestLegacyBase64Path:
 # ── Migration utility ─────────────────────────────────────────────────────────
 
 class TestMigrationUtility:
-    @patch("app.upload_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_media", return_value=FAKE_R2_URL)
     def test_migrate_base64_post_to_r2(self, mock_upload, app_ctx, client, users, vault, auth_owner):
         owner, _, _ = users
         with app_ctx.app_context():
@@ -247,7 +247,7 @@ class TestMigrationUtility:
         assert data["migrated"] is True
         assert data["media_url"] == FAKE_R2_URL
 
-    @patch("app.upload_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_media", return_value=FAKE_R2_URL)
     def test_migrate_already_r2_post_is_noop(self, mock_upload, app_ctx, client, users, vault, auth_owner):
         owner, _, _ = users
         with app_ctx.app_context():
@@ -292,7 +292,7 @@ class TestSizeLimits:
 
     def test_oversized_image_r2_not_called(self, client, vault, auth_owner):
         big_bytes = bytes([0xFF, 0xD8, 0xFF, 0xE0]) + b"\x00" * (5 * 1024 * 1024 + 1)
-        with unittest.mock.patch("app.upload_post_media") as mock_r2:
+        with unittest.mock.patch("routes.posts.upload_post_media") as mock_r2:
             _post_multipart(client, vault.id, auth_owner,
                             big_bytes, "big.jpg", "image/jpeg", "image")
             mock_r2.assert_not_called()
@@ -306,11 +306,11 @@ class TestSizeLimits:
         with app_ctx.app_context():
             assert A.Post.query.filter_by(vault_id=vault.id).count() == before
 
-    @pytest.mark.patch("app.upload_post_media", return_value=FAKE_R2_URL)
+    @pytest.mark.patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL)
     def test_boundary_size_image_accepted(self, client, vault, auth_owner):
         # Exactly 5 MB — should pass
         boundary_bytes = bytes([0xFF, 0xD8, 0xFF, 0xE0]) + b"\x00" * (5 * 1024 * 1024 - 4)
-        with unittest.mock.patch("app.upload_post_media", return_value=FAKE_R2_URL):
+        with unittest.mock.patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL):
             r = _post_multipart(client, vault.id, auth_owner,
                                 boundary_bytes, "ok.jpg", "image/jpeg", "image")
         assert r.status_code == 201
@@ -367,7 +367,7 @@ class TestMigrationEndpointRename:
 
     def test_migration_at_correct_route(self, app_ctx, client, users, vault, auth_owner):
         post_id = self._setup_legacy_post(app_ctx, users, vault)
-        with unittest.mock.patch("app.upload_media", return_value=FAKE_R2_URL):
+        with unittest.mock.patch("routes.posts.upload_media", return_value=FAKE_R2_URL):
             r = client.post(f"/api/posts/{post_id}/migrate-media", headers=auth_owner)
         assert r.status_code == 200
 
@@ -388,7 +388,7 @@ class TestMigrationEndpointRename:
 
     def test_migration_r2_failure_leaves_original_url(self, app_ctx, client, users, vault, auth_owner):
         post_id = self._setup_legacy_post(app_ctx, users, vault)
-        with unittest.mock.patch("app.upload_media", side_effect=Exception("R2 down")):
+        with unittest.mock.patch("routes.posts.upload_media", side_effect=Exception("R2 down")):
             r = client.post(f"/api/posts/{post_id}/migrate-media", headers=auth_owner)
         assert r.status_code == 503
         with app_ctx.app_context():
@@ -401,7 +401,7 @@ class TestMigrationEndpointRename:
 class TestByteSignatureValidation:
     """Every multipart upload must pass magic-byte verification before R2 is called."""
 
-    @patch("app.upload_post_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL)
     def test_valid_jpeg_bytes_accepted(self, mock_r2, client, vault, auth_owner):
         r = _post_multipart(client, vault.id, auth_owner,
                             JPEG_BYTES, "photo.jpg", "image/jpeg", "image")
@@ -409,7 +409,7 @@ class TestByteSignatureValidation:
 
     def test_random_bytes_with_jpeg_mime_rejected(self, client, vault, auth_owner):
         """Fake JPEG: MIME says image/jpeg but bytes are random junk."""
-        with unittest.mock.patch("app.upload_post_media") as mock_r2:
+        with unittest.mock.patch("routes.posts.upload_post_media") as mock_r2:
             r = _post_multipart(client, vault.id, auth_owner,
                                 b"\x00\x01\x02\x03" * 20, "photo.jpg", "image/jpeg", "image")
             mock_r2.assert_not_called()
@@ -417,7 +417,7 @@ class TestByteSignatureValidation:
 
     def test_png_bytes_with_jpeg_mime_rejected(self, client, vault, auth_owner):
         """PNG content declared as JPEG — signature mismatch."""
-        with unittest.mock.patch("app.upload_post_media") as mock_r2:
+        with unittest.mock.patch("routes.posts.upload_post_media") as mock_r2:
             r = _post_multipart(client, vault.id, auth_owner,
                                 PNG_BYTES, "photo.jpg", "image/jpeg", "image")
             mock_r2.assert_not_called()
@@ -425,32 +425,32 @@ class TestByteSignatureValidation:
 
     def test_jpeg_bytes_submitted_as_video_rejected(self, client, vault, auth_owner):
         """Image bytes with video/mp4 MIME — cross-type rejection."""
-        with unittest.mock.patch("app.upload_post_media") as mock_r2:
+        with unittest.mock.patch("routes.posts.upload_post_media") as mock_r2:
             r = _post_multipart(client, vault.id, auth_owner,
                                 JPEG_BYTES, "clip.mp4", "video/mp4", "video")
             mock_r2.assert_not_called()
         assert r.status_code == 400
 
     def test_mp4_bytes_submitted_as_image_rejected(self, client, vault, auth_owner):
-        with unittest.mock.patch("app.upload_post_media") as mock_r2:
+        with unittest.mock.patch("routes.posts.upload_post_media") as mock_r2:
             r = _post_multipart(client, vault.id, auth_owner,
                                 MP4_BYTES, "photo.jpg", "image/jpeg", "image")
             mock_r2.assert_not_called()
         assert r.status_code == 400
 
-    @patch("app.upload_post_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL)
     def test_valid_png_bytes_accepted(self, mock_r2, client, vault, auth_owner):
         r = _post_multipart(client, vault.id, auth_owner,
                             PNG_BYTES, "photo.png", "image/png", "image")
         assert r.status_code == 201
 
-    @patch("app.upload_post_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL)
     def test_valid_mp4_bytes_accepted(self, mock_r2, client, vault, auth_owner):
         r = _post_multipart(client, vault.id, auth_owner,
                             MP4_BYTES, "clip.mp4", "video/mp4", "video")
         assert r.status_code == 201
 
-    @patch("app.upload_post_media", return_value=FAKE_R2_URL)
+    @patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL)
     def test_valid_webm_bytes_accepted(self, mock_r2, client, vault, auth_owner):
         r = _post_multipart(client, vault.id, auth_owner,
                             WEBM_BYTES, "clip.webm", "video/webm", "video")
@@ -461,7 +461,7 @@ class TestExtensionMimeAgreement:
     """Extension must match the MIME type exactly per _MEDIA_SPEC."""
 
     def test_exe_extension_with_image_mime_rejected(self, client, vault, auth_owner):
-        with unittest.mock.patch("app.upload_post_media") as mock_r2:
+        with unittest.mock.patch("routes.posts.upload_post_media") as mock_r2:
             r = _post_multipart(client, vault.id, auth_owner,
                                 JPEG_BYTES, "evil.exe", "image/jpeg", "image")
             mock_r2.assert_not_called()
@@ -469,14 +469,14 @@ class TestExtensionMimeAgreement:
 
     def test_png_extension_with_jpeg_mime_rejected(self, client, vault, auth_owner):
         """Extension .png but MIME image/jpeg — mismatch."""
-        with unittest.mock.patch("app.upload_post_media") as mock_r2:
+        with unittest.mock.patch("routes.posts.upload_post_media") as mock_r2:
             r = _post_multipart(client, vault.id, auth_owner,
                                 JPEG_BYTES, "photo.png", "image/jpeg", "image")
             mock_r2.assert_not_called()
         assert r.status_code == 400
 
     def test_missing_extension_rejected(self, client, vault, auth_owner):
-        with unittest.mock.patch("app.upload_post_media") as mock_r2:
+        with unittest.mock.patch("routes.posts.upload_post_media") as mock_r2:
             r = _post_multipart(client, vault.id, auth_owner,
                                 JPEG_BYTES, "photonoext", "image/jpeg", "image")
             mock_r2.assert_not_called()
@@ -484,13 +484,13 @@ class TestExtensionMimeAgreement:
 
     def test_uppercase_extension_normalised_and_accepted(self, client, vault, auth_owner):
         """JPG → .jpg after lower() normalisation — should be accepted."""
-        with unittest.mock.patch("app.upload_post_media", return_value=FAKE_R2_URL):
+        with unittest.mock.patch("routes.posts.upload_post_media", return_value=FAKE_R2_URL):
             r = _post_multipart(client, vault.id, auth_owner,
                                 JPEG_BYTES, "photo.JPG", "image/jpeg", "image")
         assert r.status_code == 201
 
     def test_no_r2_call_on_extension_mismatch(self, client, vault, auth_owner):
-        with unittest.mock.patch("app.upload_post_media") as mock_r2:
+        with unittest.mock.patch("routes.posts.upload_post_media") as mock_r2:
             _post_multipart(client, vault.id, auth_owner,
                             JPEG_BYTES, "photo.png", "image/jpeg", "image")
             mock_r2.assert_not_called()
@@ -498,7 +498,7 @@ class TestExtensionMimeAgreement:
     def test_no_orphan_post_on_extension_mismatch(self, app_ctx, client, vault, auth_owner):
         with app_ctx.app_context():
             before = A.Post.query.filter_by(vault_id=vault.id).count()
-        with unittest.mock.patch("app.upload_post_media"):
+        with unittest.mock.patch("routes.posts.upload_post_media"):
             _post_multipart(client, vault.id, auth_owner,
                             JPEG_BYTES, "photo.png", "image/jpeg", "image")
         with app_ctx.app_context():
