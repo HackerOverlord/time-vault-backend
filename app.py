@@ -59,6 +59,17 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024 + 64 * 1024
 db = SQLAlchemy(app)
 
 
+@app.after_request
+def set_security_headers(response):
+    """This service only returns JSON, so lock everything else down."""
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    response.headers.setdefault('Referrer-Policy', 'no-referrer')
+    response.headers.setdefault('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'")
+    response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+    return response
+
+
 @app.errorhandler(413)
 def request_too_large(e):
     """Return a JSON 413 instead of Flask's default HTML page."""
@@ -67,6 +78,31 @@ def request_too_large(e):
 
 
 
+# ── JWT helpers ──────────────────────────────────────────────────────────────
+# Each token carries a fingerprint of the user's current password hash ('pwv').
+# Changing the password changes the fingerprint, so every token issued before
+# the change stops working. Deleted users fail the lookup. No DB column needed.
+TOKEN_LIFETIME = timedelta(days=7)
+
+def _password_fingerprint(user):
+    return hashlib.sha256(user.password_hash.encode()).hexdigest()[:16]
+
+def issue_token(user):
+    return jwt.encode({
+        'user_id': user.id,
+        'pwv': _password_fingerprint(user),
+        'exp': datetime.utcnow() + TOKEN_LIFETIME,
+    }, app.config['SECRET_KEY'], algorithm='HS256')
+
+def user_from_token(token):
+    """Return the User for a valid, current token, else None.
+    Raises jwt.ExpiredSignatureError for expired tokens."""
+    data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+    user = User.query.get(data.get('user_id'))
+    if not user or not secrets.compare_digest(str(data.get('pwv', '')), _password_fingerprint(user)):
+        return None
+    return user
+
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -74,12 +110,14 @@ def token_required(f):
         if not token:
             return jsonify({'error': 'Unauthorized'}), 401
         try:
-            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-            g.user_id = data['user_id']  # ← use g instead of session
+            user = user_from_token(token)
         except jwt.ExpiredSignatureError:
             return jsonify({'error': 'Token expired'}), 401
         except jwt.InvalidTokenError:
             return jsonify({'error': 'Unauthorized'}), 401
+        if user is None:
+            return jsonify({'error': 'Session expired. Please log in again.'}), 401
+        g.user_id = user.id
         return f(*args, **kwargs)
     return decorated
 
@@ -134,6 +172,18 @@ def ensure_user_has_family(user):
         db.session.commit()
     return user.family_id
 
+
+# Notification types from the old family-tree / memories system, which the
+# current frontend no longer has screens for. Hidden from the notification list.
+LEGACY_NOTIFICATION_TYPES = (
+    'family_joined', 'family_left', 'member_added',
+    'vault_sent', 'vault_received', 'vault_deleted',
+)
+
+def utc_iso(dt):
+    """ISO-8601 with an explicit 'Z' for naive UTC datetimes, so browsers
+    don't parse them as local time. None passes through."""
+    return dt.isoformat() + 'Z' if dt else None
 
 def create_notification(user_id, type, message, vault_id=None):
     notif = Notification(user_id=user_id, type=type, message=message,
@@ -237,7 +287,7 @@ def serialize_post(post, author, vault, liked_set):
             'author_name':   author.name,
             'author_avatar': author.avatar,
             'created_at':    post.created_at.isoformat(),
-            'unlock_at':     post.unlock_at.isoformat(),
+            'unlock_at':     utc_iso(post.unlock_at),
             'is_unlocked':   False,
         'is_archived':   bool(post.is_archived),
         }
@@ -252,7 +302,7 @@ def serialize_post(post, author, vault, liked_set):
         'caption':       post.caption,
         'media_type':    post.media_type,
         'media_url':     post.media_url,
-        'unlock_at':     post.unlock_at.isoformat() if post.unlock_at else None,
+        'unlock_at':     utc_iso(post.unlock_at),
         'is_unlocked':   True,
         'posted_at':     post.posted_at.isoformat() if post.posted_at else None,
         'created_at':    post.created_at.isoformat(),
@@ -1020,11 +1070,7 @@ def claim_vault():
     claimer = None
     if auth_header.startswith('Bearer '):
         try:
-            import jwt as _jwt
-            payload = _jwt.decode(
-                auth_header[7:], app.config['SECRET_KEY'], algorithms=['HS256']
-            )
-            claimer = User.query.get(payload['user_id'])
+            claimer = user_from_token(auth_header[7:])
         except Exception:
             pass
 
@@ -1099,13 +1145,7 @@ def claim_vault():
     # Return a JWT for newly created accounts
     response: dict = {'claimed': True, 'vault_id': str(vault.id)}
     if not auth_header.startswith('Bearer '):
-        import jwt as _jwt
-        token_str = _jwt.encode(
-            {'user_id': claimer.id},
-            app.config['SECRET_KEY'],
-            algorithm='HS256',
-        )
-        response['access_token'] = token_str
+        response['access_token'] = issue_token(claimer)
 
     return jsonify(response), 200
 
@@ -1584,8 +1624,21 @@ def create_post(vault_id):
             unlock_dt = datetime.fromisoformat(str(unlock_at_str))
         except (ValueError, TypeError):
             return jsonify({'error': 'Invalid unlock date format'}), 400
-        if unlock_dt.date() <= date.today():
+        # "Tomorrow" is judged in the poster's own timezone. The client sends
+        # tz_offset_minutes = JS Date.getTimezoneOffset() (UTC minus local,
+        # e.g. 240 for Toronto in summer). Missing/invalid → treat as UTC.
+        try:
+            tz_offset = int(data.get('tz_offset_minutes', 0))
+        except (ValueError, TypeError):
+            tz_offset = 0
+        if not -840 <= tz_offset <= 720:
+            tz_offset = 0
+        local_today = (datetime.utcnow() - timedelta(minutes=tz_offset)).date()
+        if unlock_dt.date() <= local_today:
             return jsonify({'error': 'Unlock date must be at least tomorrow'}), 400
+        # A date-only unlock means midnight in the poster's timezone, stored as UTC.
+        if 'T' not in str(unlock_at_str):
+            unlock_dt = unlock_dt + timedelta(minutes=tz_offset)
 
     now = datetime.utcnow()
 
@@ -1935,7 +1988,7 @@ def get_dashboard():
             'post_id':          str(cap.id),
             'vault_id':         str(cap.vault_id),
             'vault_name':       vault.name,
-            'unlock_at':        cap.unlock_at.isoformat(),
+            'unlock_at':        utc_iso(cap.unlock_at),
             'days_until_unlock': days_until_unlock,
         })
 
@@ -2298,11 +2351,7 @@ def login():
     user = User.query.filter_by(email=email).first()
     if user and check_password_hash(user.password_hash, password):
         _login_failures.pop(key, None)
-        token = jwt.encode({
-            'user_id': user.id,
-            'exp': datetime.utcnow() + timedelta(days=7)
-        }, app.config['SECRET_KEY'], algorithm='HS256')
-        return jsonify({"message": "Login successful", "token": token}), 200
+        return jsonify({"message": "Login successful", "token": issue_token(user)}), 200
     _login_failures.setdefault(key, []).append(now)
     return jsonify({"error": "Access Denied"}), 401
 
@@ -2345,11 +2394,7 @@ def register():
         # Most likely a uniqueness race on email; return the same message
         # as the pre-check to avoid leaking which field caused the conflict.
         return jsonify({'error': 'Email already registered'}), 409
-    token = jwt.encode({
-        'user_id': user.id,
-        'exp': datetime.utcnow() + timedelta(days=7)
-    }, app.config['SECRET_KEY'], algorithm='HS256')
-    return jsonify({'message': 'User created', 'token': token}), 201
+    return jsonify({'message': 'User created', 'token': issue_token(user)}), 201
 
 @app.route('/api/memories', methods=['POST'])
 @token_required
@@ -2696,20 +2741,6 @@ def get_current_user():
 }), 200
 
 
-@app.route('/api/check-email', methods=['POST'])
-def check_email():
-    data = request.get_json()
-    email = data.get('email')
-    
-    if not email:
-        return jsonify({"exists": False}), 400
-
-    # This checks your User database table
-    user = User.query.filter_by(email=email).first()
-    
-    return jsonify({"exists": user is not None})
-
-
 @app.route('/api/memories/<int:memory_id>', methods=['GET'])
 @token_required
 def get_single_memory(memory_id):
@@ -2825,6 +2856,7 @@ def get_notifications():
     if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
     notifs = Notification.query.filter_by(user_id=g.user_id)\
+        .filter(Notification.type.notin_(LEGACY_NOTIFICATION_TYPES))\
         .order_by(Notification.created_at.desc()).limit(50).all()
     return jsonify([{
         'id': str(n.id),

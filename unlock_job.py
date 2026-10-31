@@ -7,7 +7,7 @@ Responsibilities:
   3. Send the daily new_post digest at 8 PM UTC.
 
 PythonAnywhere setup:
-  Command: python3.12 /home/HackerOverlord/unlock_job.py
+  Command: python3.12 /home/HackerOverlord/time-vault-backend/unlock_job.py
   Interval: Hourly
   Output: visible in the Tasks tab → "Recent output"
 """
