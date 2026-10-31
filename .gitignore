@@ -5,3 +5,8 @@ __pycache__/
 venv/
 instance/
 *.zip
+# Never commit secrets, data, or local media
+.env
+*.db
+protected_media/
+b_*/
