@@ -27,15 +27,32 @@ from werkzeug.security import generate_password_hash
 
 # ── Environment ───────────────────────────────────────────────────────────────
 # Must be set before app is imported anywhere in the session.
-os.environ.setdefault("SECRET_KEY", "test-secret-conftest")
-# Tests drive the unlock job explicitly; keep the request hook out of the way.
-os.environ.setdefault("RUN_JOBS_ON_REQUEST", "0")
-os.environ.setdefault("ENCRYPTION_KEY", Fernet.generate_key().decode())
-os.environ.setdefault("R2_BUCKET_NAME", "test-bucket")
-os.environ.setdefault("R2_ACCOUNT_ID", "test-acct")
-os.environ.setdefault("R2_ACCESS_KEY_ID", "test-key")
-os.environ.setdefault("R2_SECRET_ACCESS_KEY", "test-sk")
-os.environ.setdefault("R2_PUBLIC_URL", "https://pub.example.com")
+#
+# SAFETY: values are FORCED, not setdefault(). app.py calls load_dotenv(),
+# which fills in anything still unset from the real .env, so on a server
+# (e.g. PythonAnywhere) the tests would otherwise use the production
+# database, real SMTP and real R2 credentials. The fixtures below call
+# drop_all() after every test: against the real database that would delete
+# every table. Everything here is throwaway and local to the test run.
+import tempfile
+_TEST_DB_DIR = tempfile.mkdtemp(prefix="timevault-tests-")
+_TEST_DB_PATH = os.path.join(_TEST_DB_DIR, "test.db")
+os.environ.update({
+    "DATABASE_URL":         f"sqlite:///{_TEST_DB_PATH}",
+    "SECRET_KEY":           "test-secret-conftest",
+    "ENCRYPTION_KEY":       Fernet.generate_key().decode(),
+    # Tests drive the unlock job explicitly; keep the request hook out of the way.
+    "RUN_JOBS_ON_REQUEST":  "0",
+    # Empty SMTP_HOST = email disabled (and blocks load_dotenv from filling it).
+    "SMTP_HOST":            "",
+    "SMTP_USER":            "",
+    "SMTP_PASSWORD":        "",
+    "R2_BUCKET_NAME":       "test-bucket",
+    "R2_ACCOUNT_ID":        "test-acct",
+    "R2_ACCESS_KEY_ID":     "test-key",
+    "R2_SECRET_ACCESS_KEY": "test-sk",
+    "R2_PUBLIC_URL":        "https://pub.example.com",
+})
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -43,6 +60,17 @@ import app as flask_app
 
 _db  = flask_app.db
 _app = flask_app.app
+
+
+def _assert_test_database():
+    """Refuse to touch any database outside the throwaway test directory."""
+    with _app.app_context():
+        path = _db.engine.url.database or ""
+    if not os.path.realpath(path).startswith(os.path.realpath(_TEST_DB_DIR)):
+        raise RuntimeError(f"Refusing to run tests against non-test database: {path!r}")
+
+
+_assert_test_database()
 
 
 # ── Token helper ──────────────────────────────────────────────────────────────
@@ -70,6 +98,7 @@ def app_ctx():
         _db.create_all()
         yield _app
         _db.session.remove()
+        _assert_test_database()
         _db.drop_all()
         _db.engine.dispose()
 
@@ -101,6 +130,7 @@ def file_app_ctx(tmp_path):
         _db.create_all()
         yield _app
         _db.session.remove()
+        _assert_test_database()
         _db.drop_all()
         _db.engine.dispose()           # release file handle before tmp_path cleanup
 
