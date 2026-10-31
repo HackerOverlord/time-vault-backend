@@ -88,17 +88,27 @@ ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY')
 if not ENCRYPTION_KEY:
     raise ValueError("ENCRYPTION_KEY environment variable is not set")
 
+from cryptography.fernet import Fernet, InvalidToken
+
+# Derive a valid Fernet key (32 url-safe base64 bytes) from ENCRYPTION_KEY,
+# so any sufficiently random string in .env works.
+_fernet = Fernet(base64.urlsafe_b64encode(hashlib.sha256(ENCRYPTION_KEY.encode()).digest()))
+_FERNET_PREFIX = b'fernet:'
+
 def encrypt_content(content):
     if not content: return b''
-    key_bytes = ENCRYPTION_KEY.encode()
-    content_bytes = content.encode()
-    encrypted = bytearray()
-    for i, byte in enumerate(content_bytes):
-        encrypted.append(byte ^ key_bytes[i % len(key_bytes)])
-    return base64.b64encode(encrypted)
+    return _FERNET_PREFIX + _fernet.encrypt(content.encode())
 
 def decrypt_content(encrypted_content):
     if not encrypted_content: return ''
+    if isinstance(encrypted_content, str):
+        encrypted_content = encrypted_content.encode()
+    if encrypted_content.startswith(_FERNET_PREFIX):
+        try:
+            return _fernet.decrypt(encrypted_content[len(_FERNET_PREFIX):]).decode()
+        except InvalidToken:
+            return ''
+    # Legacy rows: repeating-key XOR (kept read-only for backwards compatibility).
     try:
         key_bytes = ENCRYPTION_KEY.encode()
         encrypted_bytes = base64.b64decode(encrypted_content)
@@ -2255,6 +2265,25 @@ def get_family_members():
         
     return jsonify(result), 200
 
+# ── Login rate limiting ──────────────────────────────────────────────────────
+# In-memory, per worker process: max LOGIN_MAX_FAILURES failed attempts per
+# (client IP, email) within LOGIN_WINDOW. Successful login clears the counter.
+LOGIN_MAX_FAILURES = 5
+LOGIN_WINDOW = timedelta(minutes=15)
+_login_failures = {}
+
+def _client_ip():
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    return forwarded.split(',')[0].strip() if forwarded else (request.remote_addr or '')
+
+def _recent_failures(key, now):
+    attempts = [t for t in _login_failures.get(key, []) if now - t < LOGIN_WINDOW]
+    if attempts:
+        _login_failures[key] = attempts
+    else:
+        _login_failures.pop(key, None)
+    return attempts
+
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json(silent=True) or {}
@@ -2262,13 +2291,19 @@ def login():
     password = str(data.get('password') or '')
     if not email or not password:
         return jsonify({'error': 'Email and password are required'}), 400
+    key = (_client_ip(), email)
+    now = datetime.utcnow()
+    if len(_recent_failures(key, now)) >= LOGIN_MAX_FAILURES:
+        return jsonify({'error': 'Too many failed attempts. Try again in 15 minutes.'}), 429
     user = User.query.filter_by(email=email).first()
     if user and check_password_hash(user.password_hash, password):
+        _login_failures.pop(key, None)
         token = jwt.encode({
             'user_id': user.id,
             'exp': datetime.utcnow() + timedelta(days=7)
         }, app.config['SECRET_KEY'], algorithm='HS256')
         return jsonify({"message": "Login successful", "token": token}), 200
+    _login_failures.setdefault(key, []).append(now)
     return jsonify({"error": "Access Denied"}), 401
 
 @app.route('/api/register', methods=['POST'])
@@ -2343,19 +2378,10 @@ def create_memory():
 
     # Create a new memory
     # Encrypt the content before storing
-    import base64
-    content_to_encrypt = data.get('content', '')
-    key_bytes = ENCRYPTION_KEY.encode()
-    content_bytes = content_to_encrypt.encode()
-    encrypted_bytes = bytearray()
-    for i, byte in enumerate(content_bytes):
-        encrypted_bytes.append(byte ^ key_bytes[i % len(key_bytes)])
-    encrypted_content = base64.b64encode(encrypted_bytes).decode()
-
     new_memory = Memory(
         user_id=g.user_id,
         title=data.get('title'),
-        content_encrypted=encrypted_content.encode(),  # Store encrypted as binary
+        content_encrypted=encrypt_content(data.get('content', '')),
         media_content=media_content,
         media_type=media_type,
         release_date=parsed_date,
