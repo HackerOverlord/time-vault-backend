@@ -246,7 +246,7 @@ def make_vault(owner, name, description, accent, cover_colors, members, created)
 
 
 def make_post(vault, author, when, caption, image=None, likers=(), comments=()):
-    media_type = 'photo' if image is not None else 'text'
+    media_type = 'image' if image is not None else 'text'
     p = A.Post(vault_id=vault.id, author_id=author.id, caption=caption,
                media_type=media_type, media_url=to_r2(image, 'posts') if image is not None else None,
                is_unlocked=True, posted_at=when, created_at=when)
