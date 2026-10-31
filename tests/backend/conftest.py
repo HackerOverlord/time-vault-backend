@@ -46,12 +46,9 @@ _app = flask_app.app
 # ── Token helper ──────────────────────────────────────────────────────────────
 
 def _make_token(user_id: int) -> str:
-    import jwt
-    return jwt.encode(
-        {"user_id": user_id},
-        _app.config["SECRET_KEY"],
-        algorithm="HS256",
-    )
+    """Issue a real app token (includes the password fingerprint claim)."""
+    user = flask_app.User.query.get(user_id)
+    return flask_app.issue_token(user)
 
 
 # ── Strategy A: in-memory SQLite (fast, per-test, single-connection) ──────────
