@@ -1,5 +1,7 @@
 # Time Vault — Backend API
 
+[![CI](https://github.com/HackerOverlord/time-vault-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/HackerOverlord/time-vault-backend/actions/workflows/ci.yml)
+
 Flask REST API for **[Time Vault](https://time-vault-imhg.vercel.app)**, a private memory-sharing app where families post photos, videos and notes into shared vaults, and can seal posts as **time capsules** that only open on a chosen date.
 
 Frontend: [HackerOverlord/time-vault](https://github.com/HackerOverlord/time-vault) (Next.js on Vercel)
