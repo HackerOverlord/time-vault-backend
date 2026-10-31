@@ -57,6 +57,16 @@ With a real scheduler, set `RUN_JOBS_ON_REQUEST=0` and run the job directly:
 cd /home/<user>/time-vault-backend && python3.12 unlock_job.py
 ```
 
+## Demo data
+
+`scripts/seed_demo.py` creates a ready-to-show demo account: three vaults with covers, photo and text posts over the past months, likes, comments, and locked time capsules. The images are generated locally, so there are no stock photos.
+
+```bash
+python3.12 scripts/seed_demo.py            # create; prints the demo login once
+python3.12 scripts/seed_demo.py --reset    # wipe demo data and recreate
+python3.12 scripts/seed_demo.py --delete   # remove demo data
+```
+
 ## Configuration
 
 See [`env.example`](env.example). Required: `SECRET_KEY`, `ENCRYPTION_KEY`, and the `R2_*` variables. Optional: `SMTP_*` (email), `APP_BASE_URL`, `DATABASE_URL`.
