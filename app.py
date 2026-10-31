@@ -59,6 +59,39 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024 + 64 * 1024
 db = SQLAlchemy(app)
 
 
+# ── Background jobs without a scheduler ──────────────────────────────────────
+# PythonAnywhere's free plan has no scheduled tasks, so the API runs the
+# unlock job itself: at most once per JOB_INTERVAL per worker, triggered by
+# incoming requests. run_unlock_job() claims each post with an atomic
+# conditional UPDATE, so concurrent workers never double-unlock or
+# double-notify. The daily digest runs after 20:00 UTC and is deduplicated
+# per user/vault/day by DigestDelivery rows. Disable with RUN_JOBS_ON_REQUEST=0
+# if a real scheduler (cron / PythonAnywhere task) is set up instead.
+JOB_INTERVAL = timedelta(seconds=60)
+_last_job_run = None
+
+def run_due_jobs():
+    global _last_job_run
+    now = datetime.utcnow()
+    if _last_job_run and now - _last_job_run < JOB_INTERVAL:
+        return
+    _last_job_run = now
+    try:
+        import unlock_job  # imported lazily: unlock_job imports this module
+        unlock_job.run_unlock_job()
+        if now.hour >= 20:
+            unlock_job.run_daily_digest()
+    except Exception as exc:  # never let a job failure break a user request
+        db.session.rollback()
+        app.logger.error(f'Background job failed: {exc}')
+
+@app.before_request
+def _jobs_hook():
+    if request.method == 'OPTIONS' or os.environ.get('RUN_JOBS_ON_REQUEST', '1') == '0':
+        return
+    run_due_jobs()
+
+
 @app.after_request
 def set_security_headers(response):
     """This service only returns JSON, so lock everything else down."""
@@ -3255,4 +3288,8 @@ with app.app_context():
 
 
 if __name__ == '__main__':
+    # When run as a script this module is '__main__'; register it as 'app' too
+    # so unlock_job's `from app import ...` reuses it instead of re-importing.
+    import sys
+    sys.modules.setdefault('app', sys.modules[__name__])
     app.run(debug=False, port=5000)

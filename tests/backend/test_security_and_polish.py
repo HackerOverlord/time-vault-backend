@@ -124,3 +124,47 @@ def test_legacy_notifications_hidden(client, users, auth_owner):
     msgs = [n["message"] for n in client.get("/api/notifications", headers=auth_owner).get_json()]
     assert "someone joined your vault" in msgs
     assert "old family thing" not in msgs
+
+
+# ── Unlock job runs from requests (no scheduler on free hosting) ─────────────
+
+def _due_capsule(users, vault):
+    owner = users[0]
+    p = A.Post(vault_id=vault.id, author_id=owner.id, caption="hello future",
+               media_type="text", media_url=None,
+               unlock_at=datetime.utcnow() - timedelta(minutes=1), is_unlocked=False,
+               posted_at=None, created_at=datetime.utcnow() - timedelta(days=30))
+    A.db.session.add(p)
+    A.db.session.commit()
+    return p.id
+
+
+def test_request_unlocks_due_capsule(client, users, vault, auth_owner, monkeypatch):
+    monkeypatch.setenv("RUN_JOBS_ON_REQUEST", "1")
+    monkeypatch.setattr(A, "_last_job_run", None)
+    post_id = _due_capsule(users, vault)
+
+    posts = client.get("/api/posts", headers=auth_owner).get_json()
+    posts = posts.get("posts", posts) if isinstance(posts, dict) else posts
+    mine = [p for p in posts if p["id"] == str(post_id)][0]
+    assert mine["is_unlocked"] is True
+    assert mine["caption"] == "hello future"
+
+    notifs = client.get("/api/notifications", headers=auth_owner).get_json()
+    assert any(n["type"] == "capsule_unlocked" for n in notifs)
+
+
+def test_job_is_throttled(client, users, vault, auth_owner, monkeypatch):
+    monkeypatch.setenv("RUN_JOBS_ON_REQUEST", "1")
+    monkeypatch.setattr(A, "_last_job_run", datetime.utcnow())  # ran just now
+    post_id = _due_capsule(users, vault)
+    client.get("/api/notifications", headers=auth_owner)
+    assert A.Post.query.get(post_id).is_unlocked is False
+
+
+def test_hook_disabled_by_env(client, users, vault, auth_owner, monkeypatch):
+    monkeypatch.setenv("RUN_JOBS_ON_REQUEST", "0")
+    monkeypatch.setattr(A, "_last_job_run", None)
+    post_id = _due_capsule(users, vault)
+    client.get("/api/notifications", headers=auth_owner)
+    assert A.Post.query.get(post_id).is_unlocked is False
