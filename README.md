@@ -64,9 +64,9 @@ cd /home/<user>/time-vault-backend && python3.12 unlock_job.py
 `scripts/seed_demo.py` creates a ready-to-show demo account: three vaults with covers, photo and text posts over the past months, likes, comments, and locked time capsules. The images are generated locally, so there are no stock photos.
 
 ```bash
-python3.12 scripts/seed_demo.py            # create; prints the demo login once
-python3.12 scripts/seed_demo.py --reset    # wipe demo data and recreate
-python3.12 scripts/seed_demo.py --delete   # remove demo data
+python3.12 scripts/seed_demo.py --email you+demo@gmail.com            # create; prints the demo login once
+python3.12 scripts/seed_demo.py --email you+demo@gmail.com --reset    # wipe demo data and recreate
+python3.12 scripts/seed_demo.py --email you+demo@gmail.com --delete   # remove demo data
 ```
 
 ## Configuration

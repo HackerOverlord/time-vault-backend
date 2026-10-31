@@ -5,11 +5,11 @@ Creates one demo login plus three "family member" accounts (which can't log
 in), three vaults with covers, photo and text posts spread over the past
 months, likes, comments, and two time capsules (one opening soon, one later).
 
-Usage (from the backend folder):
-    python3.12 scripts/seed_demo.py                 # create
-    python3.12 scripts/seed_demo.py --reset         # delete demo data, recreate
-    python3.12 scripts/seed_demo.py --delete        # delete demo data only
-    python3.12 scripts/seed_demo.py --email you+demo@gmail.com
+Usage (from the backend folder), with an inbox you control so
+"Forgot password?" works for the demo login:
+    python3.12 scripts/seed_demo.py --email you+demo@gmail.com            # create
+    python3.12 scripts/seed_demo.py --email you+demo@gmail.com --reset    # recreate
+    python3.12 scripts/seed_demo.py --email you+demo@gmail.com --delete   # remove
 
 The demo password is generated randomly and printed once. Forgot it? Use
 "Forgot password?" in the app (the +demo address goes to your inbox).
@@ -39,7 +39,6 @@ except ImportError:
 import app as A                                      # noqa: E402
 from werkzeug.security import generate_password_hash  # noqa: E402
 
-DEFAULT_EMAIL = 'you+demo@example.com'
 # Supporting cast: unusable passwords, example.com addresses (never emailed).
 CAST = [
     ('Maya',  'Kakar', 'maya.demo@example.com'),
@@ -339,7 +338,8 @@ def seed(email):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--email', default=DEFAULT_EMAIL)
+    ap.add_argument('--email', required=True,
+                    help='login email for the demo account (use an inbox you control)')
     g = ap.add_mutually_exclusive_group()
     g.add_argument('--reset', action='store_true', help='delete existing demo data, then recreate')
     g.add_argument('--delete', action='store_true', help='delete demo data only')
