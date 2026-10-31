@@ -28,6 +28,8 @@ from werkzeug.security import generate_password_hash
 # ── Environment ───────────────────────────────────────────────────────────────
 # Must be set before app is imported anywhere in the session.
 os.environ.setdefault("SECRET_KEY", "test-secret-conftest")
+# Tests drive the unlock job explicitly; keep the request hook out of the way.
+os.environ.setdefault("RUN_JOBS_ON_REQUEST", "0")
 os.environ.setdefault("ENCRYPTION_KEY", Fernet.generate_key().decode())
 os.environ.setdefault("R2_BUCKET_NAME", "test-bucket")
 os.environ.setdefault("R2_ACCOUNT_ID", "test-acct")

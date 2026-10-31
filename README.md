@@ -45,12 +45,16 @@ pip install pytest
 pytest tests
 ```
 
-## Scheduled job
+## Capsule unlocking and the daily digest
 
-`unlock_job.py` unlocks capsules whose date has passed, sends unlock notifications, and sends the daily digest at 20:00 UTC. Run it as a scheduled task:
+`unlock_job.py` unlocks capsules whose date has passed, notifies vault members, and sends the daily digest after 20:00 UTC.
+
+PythonAnywhere's free plan has no scheduled tasks, so **the API runs the job itself**, at most once a minute, triggered by incoming requests. Each capsule is claimed with an atomic conditional `UPDATE`, so concurrent workers never unlock it twice or send duplicate notifications. The digest is deduplicated per user, vault and day.
+
+With a real scheduler, set `RUN_JOBS_ON_REQUEST=0` and run the job directly:
 
 ```
-python3.12 /home/<user>/time-vault-backend/unlock_job.py
+cd /home/<user>/time-vault-backend && python3.12 unlock_job.py
 ```
 
 ## Configuration
