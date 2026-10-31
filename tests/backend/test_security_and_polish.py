@@ -168,3 +168,9 @@ def test_hook_disabled_by_env(client, users, vault, auth_owner, monkeypatch):
     post_id = _due_capsule(users, vault)
     client.get("/api/notifications", headers=auth_owner)
     assert A.Post.query.get(post_id).is_unlocked is False
+
+
+def test_missing_json_body_is_400_not_415(client, users, vault, auth_owner):
+    r = client.delete(f"/api/vaults/{vault.id}", headers=auth_owner)
+    assert r.status_code == 400
+    assert "confirmation" in r.get_json()["error"].lower()

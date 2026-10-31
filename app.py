@@ -729,7 +729,7 @@ def get_vaults():
 @token_required
 def create_vault():
     import re as _re
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     name = (data.get('name') or '').strip()
     if not name:
         return jsonify({'error': 'Vault name is required'}), 400
@@ -788,7 +788,7 @@ def delete_vault_v1(vault_id):
     result = require_vault_owner(vault_id)
     if isinstance(result, tuple):
         return result
-    confirm = (request.get_json() or {}).get('confirm_name', '')
+    confirm = (request.get_json(silent=True) or {}).get('confirm_name', '')
     if confirm != vault.name:
         return jsonify({'error': 'Vault name confirmation does not match'}), 400
     # Notify non-owner members before deletion
@@ -1318,7 +1318,7 @@ def leave_vault(vault_id):
 @app.route('/api/vaults/join', methods=['POST'])
 @token_required
 def join_vault():
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     raw = data.get('invite_code', '')
     # Normalise: strip whitespace, remove hyphens, uppercase
     normalised = raw.replace('-', '').replace(' ', '').upper()
@@ -1579,7 +1579,7 @@ def create_post(vault_id):
         data       = request.form
         media_file = request.files.get('media')
     else:
-        data       = request.get_json() or {}
+        data       = request.get_json(silent=True) or {}
         media_file = None
 
     # Reject legacy frontend fields explicitly.
@@ -1889,7 +1889,7 @@ def create_comment(post_id):
         return result
     if not post.is_unlocked:
         return jsonify({'error': 'Cannot comment on a locked time capsule'}), 403
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     body = (data.get('body') or '').strip()
     if not body:
         return jsonify({'error': 'Comment body is required'}), 400
@@ -3104,7 +3104,7 @@ def change_password():
 def delete_account():
     if not hasattr(g, 'user_id'):
         return jsonify({'error': 'Unauthorized'}), 401
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     user = User.query.get(g.user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
