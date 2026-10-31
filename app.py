@@ -228,21 +228,28 @@ def _run_migrations(conn):
             except Exception: pass
             raise
 
-    # Two-step verification flag on user (idempotent)
-    _mfa_stmt = "ALTER TABLE user ADD COLUMN mfa_enabled BOOLEAN NOT NULL DEFAULT 0"
-    try:
-        if _is_sa and _sa_text: conn.execute(_sa_text(_mfa_stmt)); conn.commit()
-        else: conn.execute(_mfa_stmt); conn.commit()
-    except Exception as _me:
-        if "duplicate column" in str(_me).lower():
-            try: conn.rollback()
-            except Exception: pass
-        else:
-            app.logger.error("User migration mfa_enabled: %s", _me)
-            try: conn.rollback()
-            except Exception: pass
-            raise
-
+    # Two-step verification columns on user (idempotent)
+    for _col, _ddl in [
+        ("mfa_enabled",             "BOOLEAN NOT NULL DEFAULT 0"),
+        ("mfa_method",              "VARCHAR(10) NOT NULL DEFAULT 'email'"),
+        ("totp_secret_enc",         "TEXT"),
+        ("totp_pending_secret_enc", "TEXT"),
+        ("totp_last_step",          "INTEGER"),
+        ("mfa_prompt_dismissed",    "BOOLEAN NOT NULL DEFAULT 0"),
+    ]:
+        _stmt = f"ALTER TABLE user ADD COLUMN {_col} {_ddl}"
+        try:
+            if _is_sa and _sa_text: conn.execute(_sa_text(_stmt)); conn.commit()
+            else: conn.execute(_stmt); conn.commit()
+        except Exception as _me:
+            if "duplicate column" in str(_me).lower():
+                try: conn.rollback()
+                except Exception: pass
+            else:
+                app.logger.error("User migration %r: %s", _col, _me)
+                try: conn.rollback()
+                except Exception: pass
+                raise
 
 with app.app_context():
     db.create_all()          # create tables that do not exist yet
