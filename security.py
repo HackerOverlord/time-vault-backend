@@ -18,17 +18,46 @@ TOKEN_LIFETIME = timedelta(days=7)
 def _password_fingerprint(user):
     return hashlib.sha256(user.password_hash.encode()).hexdigest()[:16]
 
+MFA_TOKEN_LIFETIME = timedelta(minutes=10)
+
 def issue_token(user):
     return jwt.encode({
         'user_id': user.id,
         'pwv': _password_fingerprint(user),
+        'typ': 'access',
         'exp': datetime.utcnow() + TOKEN_LIFETIME,
     }, current_app.config['SECRET_KEY'], algorithm='HS256')
 
+def issue_mfa_token(user, challenge_id):
+    """Short-lived proof that the password was correct, pending the email
+    code. Accepted only by the code-verification endpoints, never as login."""
+    return jwt.encode({
+        'user_id': user.id,
+        'pwv': _password_fingerprint(user),
+        'typ': 'mfa',
+        'cid': challenge_id,
+        'exp': datetime.utcnow() + MFA_TOKEN_LIFETIME,
+    }, current_app.config['SECRET_KEY'], algorithm='HS256')
+
+def read_mfa_token(token):
+    """Return (user, challenge_id) for a valid pending-MFA token, else None."""
+    try:
+        data = jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])
+    except jwt.InvalidTokenError:
+        return None
+    if data.get('typ') != 'mfa':
+        return None
+    user = User.query.get(data.get('user_id'))
+    if not user or not secrets.compare_digest(str(data.get('pwv', '')), _password_fingerprint(user)):
+        return None
+    return user, data.get('cid')
+
 def user_from_token(token):
-    """Return the User for a valid, current token, else None.
+    """Return the User for a valid, current access token, else None.
     Raises jwt.ExpiredSignatureError for expired tokens."""
     data = jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])
+    if data.get('typ', 'access') != 'access':     # e.g. a pending-MFA token
+        return None
     user = User.query.get(data.get('user_id'))
     if not user or not secrets.compare_digest(str(data.get('pwv', '')), _password_fingerprint(user)):
         return None

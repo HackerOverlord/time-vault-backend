@@ -13,6 +13,7 @@ from models import (
     DigestDelivery,
     FamilyMember,
     InviteCode,
+    MfaChallenge,
     Memory,
     Notification,
     PasswordResetToken,
@@ -56,6 +57,9 @@ def login():
     user = User.query.filter_by(email=email).first()
     if user and check_password_hash(user.password_hash, password):
         _login_failures.pop(key, None)
+        if user.mfa_enabled:
+            from routes.mfa import begin_login   # second step: emailed code
+            return begin_login(user)
         return jsonify({"message": "Login successful", "token": issue_token(user)}), 200
     _login_failures.setdefault(key, []).append(now)
     return jsonify({"error": "Access Denied"}), 401
@@ -118,7 +122,8 @@ def get_current_user():
     "firstName": user.first_name or user.name.split()[0],
     "lastName":  user.last_name or (user.name.split()[1] if len(user.name.split()) > 1 else ''),
     "email":     user.email,
-    "avatar":    user.avatar or None
+    "avatar":    user.avatar or None,
+    "mfaEnabled": bool(user.mfa_enabled),
 }), 200
 
 
@@ -454,6 +459,7 @@ def delete_account():
         DigestDelivery.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         Notification.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         PasswordResetToken.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        MfaChallenge.query.filter_by(user_id=user.id).delete(synchronize_session=False)
 
         # ── Phase 3: legacy cleanup ───────────────────────────────────────────────
         # Tokens this user created for vaults they do NOT own (created_by is a

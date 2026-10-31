@@ -104,8 +104,9 @@ from routes.auth import bp as auth_bp                    # noqa: E402
 from routes.vaults import bp as vaults_bp                # noqa: E402
 from routes.posts import bp as posts_bp                  # noqa: E402
 from routes.notifications import bp as notifications_bp  # noqa: E402
+from routes.mfa import bp as mfa_bp                      # noqa: E402
 
-for _bp in (auth_bp, vaults_bp, posts_bp, notifications_bp):
+for _bp in (auth_bp, vaults_bp, posts_bp, notifications_bp, mfa_bp):
     app.register_blueprint(_bp)
 
 # Re-exported for unlock_job.py, scripts/ and tests, which import from `app`.
@@ -223,6 +224,21 @@ def _run_migrations(conn):
             except Exception: pass
         else:
             app.logger.error("Notification migration vault_id: %s", _ne)
+            try: conn.rollback()
+            except Exception: pass
+            raise
+
+    # Two-step verification flag on user (idempotent)
+    _mfa_stmt = "ALTER TABLE user ADD COLUMN mfa_enabled BOOLEAN NOT NULL DEFAULT 0"
+    try:
+        if _is_sa and _sa_text: conn.execute(_sa_text(_mfa_stmt)); conn.commit()
+        else: conn.execute(_mfa_stmt); conn.commit()
+    except Exception as _me:
+        if "duplicate column" in str(_me).lower():
+            try: conn.rollback()
+            except Exception: pass
+        else:
+            app.logger.error("User migration mfa_enabled: %s", _me)
             try: conn.rollback()
             except Exception: pass
             raise
