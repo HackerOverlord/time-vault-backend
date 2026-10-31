@@ -1,11 +1,19 @@
-"""Two-step verification by email code.
+"""Two-step verification: an emailed code, or an authenticator app (TOTP).
 
-Login with 2FA on:   POST /api/login                -> {mfa_required, mfa_token}
+Login with 2FA on:   POST /api/login                -> {mfa_required, mfa_token, method}
                      POST /api/login/mfa            {mfa_token, code} -> {token}
-                     POST /api/login/mfa/resend     {mfa_token} -> {mfa_token}
-Settings:            POST /api/mfa/enable           (emails a code)
+                     POST /api/login/mfa/resend     {mfa_token} -> {mfa_token}   (email only)
+Settings, email:     POST /api/mfa/enable           (emails a code)
                      POST /api/mfa/enable/confirm   {code}
-                     POST /api/mfa/disable          {password}
+Settings, app:       POST /api/mfa/totp/setup       -> {secret, otpauth_uri}
+                     POST /api/mfa/totp/confirm     {code} -> {recovery_codes}
+                     POST /api/mfa/recovery-codes   {password} -> {recovery_codes}
+Either:              POST /api/mfa/disable          {password}
+Sign-up prompt:      POST /api/me/mfa-prompt/dismiss
+
+Authenticator users can sign in with a single-use recovery code instead of an
+app code, and must give an app or recovery code to reset a forgotten password
+(so someone who only controls their email can't take the account over).
 
 Codes: 6 digits, single use, valid 10 minutes, 5 wrong tries per code, and at
 most MAX_CODES_PER_HOUR codes per user per purpose (caps guessing and email
@@ -20,7 +28,8 @@ from flask import Blueprint, request, jsonify, g, current_app
 from werkzeug.security import check_password_hash
 
 from extensions import db
-from models import MfaChallenge, User
+from models import MfaChallenge, RecoveryCode, User
+import totp
 from security import token_required, issue_token, issue_mfa_token, read_mfa_token
 from emailer import send_verification_code_email
 
@@ -93,20 +102,117 @@ def check_code(user, challenge_id, purpose, code, now=None):
     return 'expired' if ch.used else 'wrong'
 
 
+def _start_app_challenge(user, now=None):
+    """Login attempt record for authenticator users: nothing is sent, but the
+    row carries the wrong-guess counter and the hourly cap."""
+    now = now or datetime.utcnow()
+    recent = MfaChallenge.query.filter(
+        MfaChallenge.user_id == user.id,
+        MfaChallenge.purpose == 'login',
+        MfaChallenge.created_at > now - timedelta(hours=1),
+    ).count()
+    if recent >= MAX_CODES_PER_HOUR:
+        raise TooManyCodes()
+    MfaChallenge.query.filter_by(user_id=user.id, purpose='login', used=False)\
+        .update({'used': True}, synchronize_session=False)
+    ch = MfaChallenge(user_id=user.id, purpose='login', code_hash='totp',
+                      created_at=now, expires_at=now + CODE_LIFETIME)
+    db.session.add(ch)
+    db.session.commit()
+    return ch
+
+
 def begin_login(user):
     """Called by /api/login after a correct password for a 2FA user."""
+    is_app = user.mfa_method == 'totp'
     try:
-        ch = start_challenge(user, 'login')
+        ch = _start_app_challenge(user) if is_app else start_challenge(user, 'login')
     except TooManyCodes:
-        return jsonify({'error': 'Too many codes requested. Try again in an hour.'}), 429
+        msg = ('Too many sign-in attempts. Try again in an hour.' if is_app
+               else 'Too many codes requested. Try again in an hour.')
+        return jsonify({'error': msg}), 429
     except Exception as exc:
         current_app.logger.error(f'Sending login code failed: {exc}')
         return jsonify({'error': "We couldn't send your sign-in code. Try again shortly."}), 503
-    return jsonify({
+    body = {
         'mfa_required': True,
         'mfa_token': issue_mfa_token(user, ch.id),
-        'email_hint': mask_email(user.email),
-    }), 200
+        'method': 'totp' if is_app else 'email',
+    }
+    if not is_app:
+        body['email_hint'] = mask_email(user.email)
+    return jsonify(body), 200
+
+
+# ── Authenticator app + recovery codes ───────────────────────────────────────
+
+def check_app_or_recovery_code(user, code):
+    """Return 'app', 'recovery' or None. Consumes the code on success: an app
+    code can't be replayed, and a recovery code works once."""
+    secret_enc = user.totp_secret_enc
+    if not secret_enc:
+        return None
+    if totp.looks_like_recovery_code(code):
+        h = totp.hash_recovery_code(code)
+        row = RecoveryCode.query.filter_by(user_id=user.id, code_hash=h, used_at=None).first()
+        if not row:
+            return None
+        claimed = RecoveryCode.query.filter_by(id=row.id, used_at=None)\
+            .update({'used_at': datetime.utcnow()}, synchronize_session=False)
+        db.session.commit()
+        return 'recovery' if claimed else None
+    step = totp.verify(totp.decrypt_secret(secret_enc), code, user.totp_last_step)
+    if step is None:
+        return None
+    # Only advance if nobody else used this step first (two tabs, a replay).
+    last = user.totp_last_step
+    q = User.query.filter_by(id=user.id)
+    q = q.filter(User.totp_last_step.is_(None)) if last is None else q.filter(User.totp_last_step == last)
+    claimed = q.update({'totp_last_step': step}, synchronize_session=False)
+    db.session.commit()
+    db.session.refresh(user)
+    return 'app' if claimed else None
+
+
+def recovery_codes_left(user):
+    if user.mfa_method != 'totp' or not user.mfa_enabled:
+        return 0
+    return RecoveryCode.query.filter_by(user_id=user.id, used_at=None).count()
+
+
+def _issue_recovery_codes(user):
+    RecoveryCode.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+    codes = totp.new_recovery_codes()
+    for c in codes:
+        db.session.add(RecoveryCode(user_id=user.id, code_hash=totp.hash_recovery_code(c)))
+    return codes
+
+
+def _clear_app_settings(user):
+    user.totp_secret_enc = None
+    user.totp_pending_secret_enc = None
+    user.totp_last_step = None
+    RecoveryCode.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+
+
+def _check_app_login(user, cid, code):
+    """Second step for authenticator users, with the wrong-guess counter
+    kept on the login attempt row."""
+    now = datetime.utcnow()
+    ch = MfaChallenge.query.filter_by(id=cid, user_id=user.id, purpose='login').first()
+    if not ch or ch.used or ch.expires_at < now or ch.attempts >= MAX_ATTEMPTS:
+        return 'expired', None
+    how = check_app_or_recovery_code(user, code)
+    if how:
+        MfaChallenge.query.filter_by(id=ch.id).update({'used': True}, synchronize_session=False)
+        db.session.commit()
+        return 'ok', how
+    ch = MfaChallenge.query.get(cid)
+    ch.attempts += 1
+    if ch.attempts >= MAX_ATTEMPTS:
+        ch.used = True
+    db.session.commit()
+    return ('expired' if ch.used else 'wrong'), None
 
 
 # ── Login: second step ───────────────────────────────────────────────────────
@@ -118,6 +224,16 @@ def verify_login_code():
     if not pending:
         return jsonify({'error': 'Your sign-in expired. Please sign in again.'}), 401
     user, cid = pending
+    if user.mfa_method == 'totp':
+        result, how = _check_app_login(user, cid, data.get('code'))
+        if result == 'ok':
+            body = {'message': 'Login successful', 'token': issue_token(user)}
+            if how == 'recovery':
+                body['recovery_codes_left'] = recovery_codes_left(user)
+            return jsonify(body), 200
+        if result == 'wrong':
+            return jsonify({'error': "That code isn't right. Check your authenticator app and try again."}), 401
+        return jsonify({'error': 'Too many tries. Please sign in again.', 'code_expired': True}), 401
     result = check_code(user, cid, 'login', data.get('code'))
     if result == 'ok':
         return jsonify({'message': 'Login successful', 'token': issue_token(user)}), 200
@@ -133,6 +249,8 @@ def resend_login_code():
     if not pending:
         return jsonify({'error': 'Your sign-in expired. Please sign in again.'}), 401
     user, cid = pending
+    if user.mfa_method == 'totp':
+        return jsonify({'error': 'Codes come from your authenticator app, not email.'}), 400
     last = MfaChallenge.query.get(cid)
     if last and datetime.utcnow() - last.created_at < RESEND_COOLDOWN:
         return jsonify({'error': 'Please wait a few seconds before asking for another code.'}), 429
@@ -167,8 +285,11 @@ def enable_confirm():
     result = check_code(user, ch.id if ch else None, 'enable', data.get('code'))
     if result == 'ok':
         user.mfa_enabled = True
+        user.mfa_method = 'email'
+        _clear_app_settings(user)
         db.session.commit()
-        return jsonify({'message': '2-step verification is on', 'mfaEnabled': True}), 200
+        return jsonify({'message': '2-step verification is on', 'mfaEnabled': True,
+                        'mfaMethod': 'email'}), 200
     if result == 'wrong':
         return jsonify({'error': "That code isn't right."}), 400
     return jsonify({'error': 'This code has expired. Send a new one.', 'code_expired': True}), 400
@@ -182,7 +303,72 @@ def disable():
     if not check_password_hash(user.password_hash, str(data.get('password') or '')):
         return jsonify({'error': 'Password is incorrect.'}), 400
     user.mfa_enabled = False
+    user.mfa_method = 'email'
+    _clear_app_settings(user)
     MfaChallenge.query.filter_by(user_id=user.id, used=False)\
         .update({'used': True}, synchronize_session=False)
     db.session.commit()
     return jsonify({'message': '2-step verification is off', 'mfaEnabled': False}), 200
+
+
+@bp.route('/api/mfa/totp/setup', methods=['POST'])
+@token_required
+def totp_setup():
+    """Make a new secret for the QR code. Nothing changes until it's confirmed."""
+    user = User.query.get(g.user_id)
+    if user.mfa_enabled:
+        return jsonify({'error': 'Turn off 2-step verification first, then choose a new method.'}), 400
+    secret = totp.new_secret()
+    user.totp_pending_secret_enc = totp.encrypt_secret(secret)
+    db.session.commit()
+    return jsonify({'secret': secret,
+                    'otpauth_uri': totp.provisioning_uri(secret, user.email)}), 200
+
+
+@bp.route('/api/mfa/totp/confirm', methods=['POST'])
+@token_required
+def totp_confirm():
+    user = User.query.get(g.user_id)
+    if user.mfa_enabled:
+        return jsonify({'error': '2-step verification is already on.'}), 400
+    if not user.totp_pending_secret_enc:
+        return jsonify({'error': 'Start the set-up again.', 'code_expired': True}), 400
+    data = request.get_json(silent=True) or {}
+    secret = totp.decrypt_secret(user.totp_pending_secret_enc)
+    step = totp.verify(secret, data.get('code'), None)
+    if step is None:
+        return jsonify({'error': "That code isn't right. Make sure your phone's clock is set automatically."}), 400
+    user.totp_secret_enc = user.totp_pending_secret_enc
+    user.totp_pending_secret_enc = None
+    user.totp_last_step = step
+    user.mfa_method = 'totp'
+    user.mfa_enabled = True
+    MfaChallenge.query.filter_by(user_id=user.id, used=False)\
+        .update({'used': True}, synchronize_session=False)
+    codes = _issue_recovery_codes(user)
+    db.session.commit()
+    return jsonify({'message': '2-step verification is on', 'mfaEnabled': True,
+                    'mfaMethod': 'totp', 'recovery_codes': codes}), 200
+
+
+@bp.route('/api/mfa/recovery-codes', methods=['POST'])
+@token_required
+def regenerate_recovery_codes():
+    user = User.query.get(g.user_id)
+    data = request.get_json(silent=True) or {}
+    if not check_password_hash(user.password_hash, str(data.get('password') or '')):
+        return jsonify({'error': 'Password is incorrect.'}), 400
+    if not (user.mfa_enabled and user.mfa_method == 'totp'):
+        return jsonify({'error': 'Recovery codes are only used with an authenticator app.'}), 400
+    codes = _issue_recovery_codes(user)
+    db.session.commit()
+    return jsonify({'recovery_codes': codes}), 200
+
+
+@bp.route('/api/me/mfa-prompt/dismiss', methods=['POST'])
+@token_required
+def dismiss_prompt():
+    user = User.query.get(g.user_id)
+    user.mfa_prompt_dismissed = True
+    db.session.commit()
+    return jsonify({'mfaPromptDismissed': True}), 200

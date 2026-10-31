@@ -15,6 +15,7 @@ from models import (
     InviteCode,
     MfaChallenge,
     Memory,
+    RecoveryCode,
     Notification,
     PasswordResetToken,
     Post,
@@ -24,6 +25,7 @@ from models import (
     Vault,
     VaultMember,
 )
+from routes.mfa import check_app_or_recovery_code, recovery_codes_left
 from security import (
     LOGIN_MAX_FAILURES,
     _client_ip,
@@ -124,6 +126,9 @@ def get_current_user():
     "email":     user.email,
     "avatar":    user.avatar or None,
     "mfaEnabled": bool(user.mfa_enabled),
+    "mfaMethod": user.mfa_method if user.mfa_enabled else None,
+    "mfaPromptDismissed": bool(user.mfa_prompt_dismissed),
+    "recoveryCodesLeft": recovery_codes_left(user),
 }), 200
 
 
@@ -259,6 +264,12 @@ def forgot_password():
             current_app.logger.error(f'Password reset email failed: {exc}')
     return jsonify(_FORGOT_RESPONSE), 200
 
+# Wrong authenticator codes per reset link (in memory; the link is burned at
+# the limit, and links only live 30 minutes anyway).
+_reset_code_failures = {}
+RESET_CODE_MAX_FAILURES = 5
+
+
 @bp.route('/api/reset-password', methods=['POST'])
 def reset_password():
     data    = request.get_json(silent=True) or {}
@@ -277,6 +288,25 @@ def reset_password():
     user = User.query.get(row.user_id)
     if not user:
         return jsonify({'error': 'This reset link is invalid or has expired. Request a new one.'}), 400
+
+    # Authenticator users must also prove they have the app (or a recovery
+    # code), so control of the email inbox alone can't take the account.
+    if user.mfa_enabled and user.mfa_method == 'totp':
+        code = str(data.get('code') or '').strip()
+        if not code:
+            return jsonify({'error': 'Enter a code from your authenticator app or a recovery code.',
+                            'mfa_code_required': True}), 403
+        if not check_app_or_recovery_code(user, code):
+            fails = _reset_code_failures.get(row.id, 0) + 1
+            _reset_code_failures[row.id] = fails
+            if fails >= RESET_CODE_MAX_FAILURES:
+                _reset_code_failures.pop(row.id, None)
+                PasswordResetToken.query.filter_by(id=row.id)\
+                    .update({'used': True}, synchronize_session=False)
+                db.session.commit()
+                return jsonify({'error': 'Too many wrong codes. Request a new reset link.'}), 400
+            return jsonify({'error': "That code isn't right.", 'mfa_code_required': True}), 403
+        _reset_code_failures.pop(row.id, None)
 
     # Claim the token atomically so a link can't be used twice concurrently.
     claimed = PasswordResetToken.query.filter_by(id=row.id, used=False)\
@@ -460,6 +490,7 @@ def delete_account():
         Notification.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         PasswordResetToken.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         MfaChallenge.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        RecoveryCode.query.filter_by(user_id=user.id).delete(synchronize_session=False)
 
         # ── Phase 3: legacy cleanup ───────────────────────────────────────────────
         # Tokens this user created for vaults they do NOT own (created_by is a

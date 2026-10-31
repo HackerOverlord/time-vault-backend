@@ -19,6 +19,13 @@ class User(db.Model):
     avatar = db.Column(db.Text, nullable=True)  # stores base64
     # Two-step verification: email a 6-digit code at login when enabled.
     mfa_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    # 'email' (code by email) or 'totp' (authenticator app).
+    mfa_method = db.Column(db.String(10), nullable=False, default='email', server_default='email')
+    totp_secret_enc = db.Column(db.Text, nullable=True)          # Fernet-encrypted
+    totp_pending_secret_enc = db.Column(db.Text, nullable=True)  # during setup only
+    totp_last_step = db.Column(db.Integer, nullable=True)        # blocks code reuse
+    # The one-time "turn on 2-step verification?" card after sign-up.
+    mfa_prompt_dismissed = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
 
 
 class Family(db.Model):
@@ -191,6 +198,14 @@ class DigestDelivery(db.Model):
         UniqueConstraint('user_id', 'vault_id', 'digest_date',
                          name='uq_digest_delivery'),
     )
+
+
+class RecoveryCode(db.Model):
+    """Single-use backup code for authenticator users. Only an HMAC is stored."""
+    id        = db.Column(db.Integer, primary_key=True)
+    user_id   = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    code_hash = db.Column(db.String(64), nullable=False)
+    used_at   = db.Column(db.DateTime, nullable=True)
 
 
 class MfaChallenge(db.Model):
