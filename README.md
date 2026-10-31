@@ -48,6 +48,8 @@ models.py           SQLAlchemy models
 r2.py               Cloudflare R2 storage
 unlock_job.py       Capsule unlocking and the daily digest
 scripts/seed_demo.py  Demo data
+scripts/backup_db.py  Database backup / restore
+backup.py           Backup logic (also run daily by the app)
 tests/backend/      pytest suite
 ```
 
@@ -88,6 +90,18 @@ python3.12 scripts/seed_demo.py --email you+demo@gmail.com            # create; 
 python3.12 scripts/seed_demo.py --email you+demo@gmail.com --reset    # wipe demo data and recreate
 python3.12 scripts/seed_demo.py --email you+demo@gmail.com --delete   # remove demo data
 ```
+
+## Database backups
+
+Once a day, on the first request after 24 hours, the app writes a consistent, integrity-checked, gzip-compressed copy of the SQLite database to `instance/backups/` and keeps the newest 14. It uses SQLite's online backup API, so it's safe while the app is serving requests.
+
+```bash
+python3.12 scripts/backup_db.py                    # back up now (e.g. before a risky change)
+python3.12 scripts/backup_db.py --list             # list backups
+python3.12 scripts/backup_db.py --restore FILE     # restore (stop the web app first)
+```
+
+Backups stay on the server and protect against bad migrations or accidental deletes. Download one occasionally for an off-server copy. They are never uploaded to R2, because the bucket is public.
 
 ## Configuration
 
