@@ -20,7 +20,8 @@ Frontend: [HackerOverlord/time-vault](https://github.com/HackerOverlord/time-vau
 | Area | Implementation |
 |---|---|
 | Authentication | JWT (HS256, 7-day expiry) sent as `Authorization: Bearer`. Each token carries a fingerprint of the password hash, so changing the password or deleting the account revokes every existing token. |
-| Passwords | Werkzeug salted hashes. Login locks for 15 minutes after 5 failures per (IP, email). |
+| Passwords | Werkzeug salted hashes. Login locks for 15 minutes after 5 failures per (IP, email). Forgot-password links are single-use, expire in 30 minutes, and don't reveal whether an account exists. |
+| 2-step verification | Optional emailed 6-digit code at sign-in. Codes are HMAC'd at rest, single-use, expire in 10 minutes, die after 5 wrong tries, and are capped at 5 per hour. The pending-login token can't be used as a session. |
 | Authorization | Every vault, post and comment route checks vault membership or ownership server-side. |
 | Encryption at rest | Legacy memory text uses Fernet (AES-128-CBC + HMAC), with the key derived from `ENCRYPTION_KEY`. |
 | Uploads | Size limits plus magic-byte checks on the decoded data. Media is stored in Cloudflare R2 under random 128-bit keys. |
@@ -40,6 +41,7 @@ routes/
   vaults.py         Vaults, covers, members, invites, child-vault claims
   posts.py          Feed, posts and time capsules, archive, likes, comments
   notifications.py  Notification list and read state
+  mfa.py            2-step verification (email codes)
 security.py         JWT issue/verify, @token_required, login lockout
 crypto.py           Fernet encryption at rest
 helpers.py          Permission checks, serializers, upload validation, notifications

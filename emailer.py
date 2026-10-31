@@ -73,3 +73,26 @@ def send_claim_invite_email(
         f'<p>Invitation expires: {expiry_str}</p>'
     )
     _send_email(to_email, subject, body_text, body_html)
+
+
+def send_verification_code_email(to_email: str, name: str, code: str, purpose: str) -> None:
+    """Email a 6-digit code for signing in or for turning on 2-step verification."""
+    import html
+    action = 'sign in to' if purpose == 'login' else 'turn on 2-step verification for'
+    subject = f'Your Time Vault code: {code}'
+    body_text = (
+        f'Hi {name},\n\n'
+        f'Use this code to {action} your Time Vault account:\n\n'
+        f'    {code}\n\n'
+        f'It expires in 10 minutes. If you didn\'t try to {action} Time Vault, '
+        f'someone may know your password: change it in Settings.\n\n'
+        f'— Time Vault'
+    )
+    body_html = (
+        f'<p>Hi {html.escape(name)},</p>'
+        f'<p>Use this code to {action} your Time Vault account:</p>'
+        f'<p style="font-size:28px;font-weight:bold;letter-spacing:6px">{code}</p>'
+        f'<p>It expires in 10 minutes. If you didn\'t try to {action} Time Vault, '
+        f'someone may know your password: change it in Settings.</p>'
+    )
+    _send_email(to_email, subject, body_text, body_html)

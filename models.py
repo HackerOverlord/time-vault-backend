@@ -17,6 +17,8 @@ class User(db.Model):
     last_login = db.Column(db.DateTime)
     family_id = db.Column(db.Integer, db.ForeignKey('family.id'), nullable=True)
     avatar = db.Column(db.Text, nullable=True)  # stores base64
+    # Two-step verification: email a 6-digit code at login when enabled.
+    mfa_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
 
 
 class Family(db.Model):
@@ -189,3 +191,19 @@ class DigestDelivery(db.Model):
         UniqueConstraint('user_id', 'vault_id', 'digest_date',
                          name='uq_digest_delivery'),
     )
+
+
+class MfaChallenge(db.Model):
+    """A pending 6-digit email code (login, or confirming 2FA enrolment).
+
+    Only an HMAC of the code is stored. Single use, short-lived, and limited
+    to a few wrong attempts.
+    """
+    id           = db.Column(db.Integer, primary_key=True)
+    user_id      = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    purpose      = db.Column(db.String(10), nullable=False)          # 'login' | 'enable'
+    code_hash    = db.Column(db.String(64), nullable=False)
+    created_at   = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    expires_at   = db.Column(db.DateTime, nullable=False)
+    attempts     = db.Column(db.Integer, nullable=False, default=0)
+    used         = db.Column(db.Boolean, nullable=False, default=False)
